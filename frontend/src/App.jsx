@@ -94,6 +94,25 @@ export default function App() {
     if (week) loadWeek(week, weeks);
   }, [week, weeks, loadWeek]);
 
+  // A background analysis (e.g. recomputing after an update) is running while old results are shown:
+  // poll until it finishes, then reload the current week.
+  useEffect(() => {
+    if (!health?.analysis_running || !weeks.length) return undefined;
+    const t = setTimeout(async () => {
+      const h = await api.health().catch(() => null);
+      if (!h) return;
+      setHealth(h);
+      if (!h.analysis_running) {
+        const w = await loadWeeks();
+        if (w.length) {
+          if (w[0].week_start === week) loadWeek(week, w);
+          else setWeek(w[0].week_start);
+        }
+      }
+    }, 10000);
+    return () => clearTimeout(t);
+  }, [health, weeks, week, loadWeeks, loadWeek]);
+
   async function runAnalysis() {
     setRunning(true);
     setRunMsg(null);
@@ -165,6 +184,10 @@ export default function App() {
       )}
       {health?.config?.env_file === "found_as_txt" && (
         <div className="notice notice-warn">Your settings file is named <code>.env.txt</code>. It works, but please rename it to <code>.env</code>.</div>
+      )}
+      {health?.analysis_running && weeks.length > 0 && !running && (
+        <div className="notice">⏳ An analysis is running in the background (for example after an update). The results
+          below are from the previous run and will refresh automatically when it finishes.</div>
       )}
       {runMsg && <div className="notice">{runMsg}</div>}
       {waiting && (

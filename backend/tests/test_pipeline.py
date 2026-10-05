@@ -173,3 +173,14 @@ def test_edited_content_is_reextracted(analysed_db):
     assert tickers() == {"INTC"}
     process_week(OneShot("Changed my mind, loading up on INTC calls"), week)  # unchanged -> kept
     assert tickers() == {"INTC"}
+
+
+def test_outdated_reports_detected(analysed_db):
+    from app import pipeline
+    assert pipeline.reports_outdated() is False
+    with session_scope() as s:
+        r = s.scalar(select(WeeklyReport).order_by(WeeklyReport.week_start.desc()).limit(1))
+        r.overview = {k: v for k, v in r.overview.items() if k != "analysis_version"}
+    assert pipeline.reports_outdated() is True
+    run_analysis(ANCHOR, collector=DemoCollector(anchor_week=ANCHOR))
+    assert pipeline.reports_outdated() is False

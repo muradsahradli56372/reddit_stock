@@ -81,10 +81,13 @@ async def lifespan(_app: FastAPI):
         from .models import WeeklyReport
         with db.session_scope() as s:
             empty = s.scalar(select(WeeklyReport.id).limit(1)) is None
-        if empty:
+        from .pipeline import reports_outdated
+        outdated = not empty and reports_outdated()
+        if empty or outdated:
             # In the background: a live first run can take minutes (rate limits); the API stays up
             # and /health reports analysis_running so the dashboard can show progress.
-            log.info("No reports yet: running initial analysis in the background")
+            log.info("running analysis in the background",
+                     extra={"reason": "no reports yet" if empty else "reports made by an older version"})
             threading.Thread(target=scheduled_run, name="initial-analysis", daemon=True).start()
     sched = _start_scheduler()
     yield

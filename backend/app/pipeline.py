@@ -37,6 +37,8 @@ from .reference import get_reference
 log = logging.getLogger(__name__)
 run_lock = threading.Lock()
 BASELINE_WEEKS = 4
+# Bump when the analysis logic changes; reports made by older logic are recomputed on startup.
+ANALYSIS_VERSION = 4
 
 
 def content_hash(text: str) -> str:
@@ -526,6 +528,7 @@ def build_overview(session: Session, week: date, metric_rows: list[dict]) -> dic
     return {
         "week_start": week.isoformat(),
         "week_end": (week + timedelta(days=6)).isoformat(),
+        "analysis_version": ANALYSIS_VERSION,
         "in_progress": progress < 1.0,
         "text_coverage": text_coverage(session, week),
         "baseline_available": any(r.get("has_baseline") for r in metric_rows),
@@ -684,3 +687,10 @@ def run_analysis(week_start: date | None = None, collector: Collector | None = N
     finally:
         api_cache.clear()
         run_lock.release()
+
+
+def reports_outdated() -> bool:
+    """True when the newest report was produced by older analysis logic (e.g. after an update)."""
+    with session_scope() as s:
+        ov = s.scalar(select(WeeklyReport.overview).order_by(WeeklyReport.week_start.desc()).limit(1))
+    return ov is not None and ov.get("analysis_version") != ANALYSIS_VERSION
