@@ -1,0 +1,33 @@
+# Terms that can mean a stock OR something else (a person, a fruit, a common word).
+# Matches of these go to the ambiguous queue and are resolved by the LLM
+# (or the rule-based fallback when no API key is configured).
+# Format: term,ticker   (term is matched case-insensitively unless it is ALL CAPS)
+Ford,F
+SOFI,SOFI
+SoFi,SOFI
+Apple,AAPL
+Target,TGT
+Block Inc,SQ
+Square,SQ
+Shell plc,SHEL
+Intel,INTC
+Delta Air Lines,DAL
+Oracle,ORCL
+Unity Software,U
+Discover Financial,DFS
+Progressive,PGR
+Snapchat,SNAP
+Visa,V
+Novo,NVO
+Lucid Group,LCID
+Toast,TOST
+Zoom Video,ZM
+Meta Platforms,META
+Arm Holdings,ARM
+Celsius Holdings,CELH
+Monster Beverage,MNST
+Freeport,FCX
+Apollo Global,APO
+COST,COST
+HOOD,HOOD
+JOBY,JOBY

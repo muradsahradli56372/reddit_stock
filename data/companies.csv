@@ -1,0 +1,328 @@
+ticker,name,exchange,aliases
+AAPL,Apple Inc.,NASDAQ,Apple|Apple Inc
+MSFT,Microsoft Corporation,NASDAQ,Microsoft|MSFT Corp
+NVDA,NVIDIA Corporation,NASDAQ,Nvidia|NVIDIA Corp|Nvidia Corp
+AMZN,Amazon.com Inc.,NASDAQ,Amazon
+GOOGL,Alphabet Inc. Class A,NASDAQ,Alphabet|Google
+GOOG,Alphabet Inc. Class C,NASDAQ,
+META,Meta Platforms Inc.,NASDAQ,Meta Platforms|Facebook
+TSLA,Tesla Inc.,NASDAQ,Tesla
+BRK.B,Berkshire Hathaway Inc.,NYSE,Berkshire Hathaway|Berkshire
+AVGO,Broadcom Inc.,NASDAQ,Broadcom
+TSM,Taiwan Semiconductor Manufacturing,NYSE,TSMC|Taiwan Semi
+LLY,Eli Lilly and Company,NYSE,Eli Lilly
+JPM,JPMorgan Chase & Co.,NYSE,JPMorgan|JP Morgan|JPMorgan Chase
+V,Visa Inc.,NYSE,Visa
+MA,Mastercard Inc.,NYSE,Mastercard
+UNH,UnitedHealth Group,NYSE,UnitedHealth|United Health
+XOM,Exxon Mobil Corporation,NYSE,Exxon|ExxonMobil|Exxon Mobil
+WMT,Walmart Inc.,NYSE,Walmart
+JNJ,Johnson & Johnson,NYSE,Johnson & Johnson|J&J
+PG,Procter & Gamble,NYSE,Procter & Gamble|P&G
+HD,Home Depot Inc.,NYSE,Home Depot
+COST,Costco Wholesale Corporation,NASDAQ,Costco
+ORCL,Oracle Corporation,NYSE,Oracle
+ABBV,AbbVie Inc.,NYSE,AbbVie
+CVX,Chevron Corporation,NYSE,Chevron
+MRK,Merck & Co.,NYSE,Merck
+BAC,Bank of America,NYSE,Bank of America|BofA
+KO,Coca-Cola Company,NYSE,Coca-Cola|Coca Cola|Coke
+PEP,PepsiCo Inc.,NASDAQ,PepsiCo|Pepsi
+NFLX,Netflix Inc.,NASDAQ,Netflix
+AMD,Advanced Micro Devices,NASDAQ,Advanced Micro Devices
+ADBE,Adobe Inc.,NASDAQ,Adobe
+CRM,Salesforce Inc.,NYSE,Salesforce
+TMO,Thermo Fisher Scientific,NYSE,Thermo Fisher
+CSCO,Cisco Systems,NASDAQ,Cisco
+ACN,Accenture plc,NYSE,Accenture
+MCD,McDonald's Corporation,NYSE,McDonald's|McDonalds
+ABT,Abbott Laboratories,NYSE,Abbott
+LIN,Linde plc,NYSE,Linde
+DHR,Danaher Corporation,NYSE,Danaher
+WFC,Wells Fargo & Company,NYSE,Wells Fargo
+DIS,Walt Disney Company,NYSE,Disney|Walt Disney
+INTC,Intel Corporation,NASDAQ,Intel
+QCOM,Qualcomm Inc.,NASDAQ,Qualcomm
+TXN,Texas Instruments,NASDAQ,Texas Instruments
+VZ,Verizon Communications,NYSE,Verizon
+T,AT&T Inc.,NYSE,AT&T
+CMCSA,Comcast Corporation,NASDAQ,Comcast
+PFE,Pfizer Inc.,NYSE,Pfizer
+NKE,Nike Inc.,NYSE,Nike
+PM,Philip Morris International,NYSE,Philip Morris
+IBM,International Business Machines,NYSE,
+INTU,Intuit Inc.,NASDAQ,Intuit
+AMGN,Amgen Inc.,NASDAQ,Amgen
+UPS,United Parcel Service,NYSE,
+NEE,NextEra Energy,NYSE,NextEra
+LOW,Lowe's Companies,NYSE,Lowe's|Lowes
+SPGI,S&P Global Inc.,NYSE,S&P Global
+HON,Honeywell International,NASDAQ,Honeywell
+RTX,RTX Corporation,NYSE,Raytheon
+CAT,Caterpillar Inc.,NYSE,Caterpillar
+GS,Goldman Sachs Group,NYSE,Goldman Sachs|Goldman
+MS,Morgan Stanley,NYSE,Morgan Stanley
+BA,Boeing Company,NYSE,Boeing
+AMAT,Applied Materials,NASDAQ,Applied Materials
+ISRG,Intuitive Surgical,NASDAQ,Intuitive Surgical
+BKNG,Booking Holdings,NASDAQ,Booking Holdings
+GE,General Electric,NYSE,General Electric|GE Aerospace
+DE,Deere & Company,NYSE,John Deere|Deere
+SBUX,Starbucks Corporation,NASDAQ,Starbucks
+BLK,BlackRock Inc.,NYSE,BlackRock
+ELV,Elevance Health,NYSE,Elevance
+MDT,Medtronic plc,NYSE,Medtronic
+GILD,Gilead Sciences,NASDAQ,Gilead
+ADP,Automatic Data Processing,NASDAQ,
+LMT,Lockheed Martin,NYSE,Lockheed Martin|Lockheed
+SYK,Stryker Corporation,NYSE,Stryker
+TJX,TJX Companies,NYSE,
+MDLZ,Mondelez International,NASDAQ,Mondelez
+ADI,Analog Devices,NASDAQ,Analog Devices
+VRTX,Vertex Pharmaceuticals,NASDAQ,Vertex Pharmaceuticals
+REGN,Regeneron Pharmaceuticals,NASDAQ,Regeneron
+CVS,CVS Health,NYSE,CVS Health
+MMC,Marsh & McLennan,NYSE,Marsh McLennan
+C,Citigroup Inc.,NYSE,Citigroup|Citi
+LRCX,Lam Research,NASDAQ,Lam Research
+SCHW,Charles Schwab Corporation,NYSE,Charles Schwab|Schwab
+PGR,Progressive Corporation,NYSE,
+MU,Micron Technology,NASDAQ,Micron
+ETN,Eaton Corporation,NYSE,
+ZTS,Zoetis Inc.,NYSE,Zoetis
+BSX,Boston Scientific,NYSE,Boston Scientific
+CI,Cigna Group,NYSE,Cigna
+SO,Southern Company,NYSE,
+BMY,Bristol-Myers Squibb,NYSE,Bristol-Myers|Bristol Myers
+PANW,Palo Alto Networks,NASDAQ,Palo Alto Networks
+KLAC,KLA Corporation,NASDAQ,
+SNPS,Synopsys Inc.,NASDAQ,Synopsys
+CDNS,Cadence Design Systems,NASDAQ,Cadence Design
+ANET,Arista Networks,NYSE,Arista
+FI,Fiserv Inc.,NYSE,Fiserv
+DUK,Duke Energy,NYSE,Duke Energy
+EQIX,Equinix Inc.,NASDAQ,Equinix
+ICE,Intercontinental Exchange,NYSE,Intercontinental Exchange
+SHW,Sherwin-Williams,NYSE,Sherwin-Williams|Sherwin Williams
+CME,CME Group,NASDAQ,CME Group
+MO,Altria Group,NYSE,Altria
+CL,Colgate-Palmolive,NYSE,Colgate-Palmolive|Colgate
+WM,Waste Management,NYSE,Waste Management
+APH,Amphenol Corporation,NYSE,Amphenol
+MCK,McKesson Corporation,NYSE,McKesson
+USB,U.S. Bancorp,NYSE,US Bancorp
+PYPL,PayPal Holdings,NASDAQ,PayPal
+ABNB,Airbnb Inc.,NASDAQ,Airbnb
+UBER,Uber Technologies,NYSE,Uber
+LYFT,Lyft Inc.,NASDAQ,Lyft
+SHOP,Shopify Inc.,NYSE,Shopify
+SQ,Block Inc.,NYSE,Block Inc|Square
+XYZ,Block Inc. (new ticker),NYSE,
+SNOW,Snowflake Inc.,NYSE,Snowflake
+CRWD,CrowdStrike Holdings,NASDAQ,CrowdStrike|Crowdstrike
+ZS,Zscaler Inc.,NASDAQ,Zscaler
+NET,Cloudflare Inc.,NYSE,Cloudflare
+DDOG,Datadog Inc.,NASDAQ,Datadog
+MDB,MongoDB Inc.,NASDAQ,MongoDB
+PLTR,Palantir Technologies,NASDAQ,Palantir|Palantir Technologies
+SOFI,SoFi Technologies,NASDAQ,SoFi|SoFi Technologies
+HOOD,Robinhood Markets,NASDAQ,Robinhood
+COIN,Coinbase Global,NASDAQ,Coinbase
+MSTR,MicroStrategy (Strategy Inc.),NASDAQ,MicroStrategy
+RKLB,Rocket Lab USA,NASDAQ,Rocket Lab|RocketLab
+ASTS,AST SpaceMobile,NASDAQ,AST SpaceMobile|SpaceMobile
+LUNR,Intuitive Machines,NASDAQ,Intuitive Machines
+SPCE,Virgin Galactic,NYSE,Virgin Galactic
+IONQ,IonQ Inc.,NYSE,IonQ
+RGTI,Rigetti Computing,NASDAQ,Rigetti
+QBTS,D-Wave Quantum,NYSE,D-Wave
+SMCI,Super Micro Computer,NASDAQ,Super Micro|Supermicro
+ARM,Arm Holdings,NASDAQ,Arm Holdings
+MRVL,Marvell Technology,NASDAQ,Marvell
+ON,ON Semiconductor,NASDAQ,onsemi|ON Semiconductor
+NXPI,NXP Semiconductors,NASDAQ,NXP
+ASML,ASML Holding,NASDAQ,
+DELL,Dell Technologies,NYSE,Dell
+HPQ,HP Inc.,NYSE,
+HPE,Hewlett Packard Enterprise,NYSE,Hewlett Packard Enterprise
+WDC,Western Digital,NASDAQ,Western Digital
+STX,Seagate Technology,NASDAQ,Seagate
+GME,GameStop Corp.,NYSE,GameStop
+AMC,AMC Entertainment,NYSE,AMC Entertainment
+BB,BlackBerry Ltd.,NYSE,BlackBerry
+NOK,Nokia Corporation,NYSE,Nokia
+BBBY,Bed Bath & Beyond,OTC,Bed Bath
+RIVN,Rivian Automotive,NASDAQ,Rivian
+LCID,Lucid Group,NASDAQ,Lucid Motors|Lucid Group
+NIO,NIO Inc.,NYSE,
+XPEV,XPeng Inc.,NYSE,XPeng
+LI,Li Auto Inc.,NASDAQ,Li Auto
+F,Ford Motor Company,NYSE,Ford|Ford Motor
+GM,General Motors,NYSE,General Motors
+STLA,Stellantis N.V.,NYSE,Stellantis
+TM,Toyota Motor Corporation,NYSE,Toyota
+BABA,Alibaba Group,NYSE,Alibaba
+JD,JD.com Inc.,NASDAQ,JD.com
+PDD,PDD Holdings,NASDAQ,Temu|Pinduoduo
+BIDU,Baidu Inc.,NASDAQ,Baidu
+SE,Sea Limited,NYSE,Sea Limited
+MELI,MercadoLibre,NASDAQ,MercadoLibre
+NU,Nu Holdings,NYSE,Nubank|Nu Holdings
+SPOT,Spotify Technology,NYSE,Spotify
+RBLX,Roblox Corporation,NYSE,Roblox
+U,Unity Software,NYSE,Unity Software
+EA,Electronic Arts,NASDAQ,Electronic Arts
+TTWO,Take-Two Interactive,NASDAQ,Take-Two|Take Two
+SNAP,Snap Inc.,NYSE,Snapchat
+PINS,Pinterest Inc.,NYSE,Pinterest
+RDDT,Reddit Inc.,NYSE,
+DUOL,Duolingo Inc.,NASDAQ,Duolingo
+ROKU,Roku Inc.,NASDAQ,Roku
+ZM,Zoom Video Communications,NASDAQ,Zoom Video
+DOCU,DocuSign Inc.,NASDAQ,DocuSign
+TWLO,Twilio Inc.,NYSE,Twilio
+OKTA,Okta Inc.,NASDAQ,Okta
+TEAM,Atlassian Corporation,NASDAQ,Atlassian
+WDAY,Workday Inc.,NASDAQ,Workday
+NOW,ServiceNow Inc.,NYSE,ServiceNow
+PATH,UiPath Inc.,NYSE,UiPath
+AI,C3.ai Inc.,NYSE,C3.ai|C3 AI
+SOUN,SoundHound AI,NASDAQ,SoundHound
+BBAI,BigBear.ai,NYSE,BigBear.ai|BigBear
+UPST,Upstart Holdings,NASDAQ,Upstart
+AFRM,Affirm Holdings,NASDAQ,Affirm
+TOST,Toast Inc.,NYSE,
+DKNG,DraftKings Inc.,NASDAQ,DraftKings
+CHWY,Chewy Inc.,NYSE,Chewy
+ETSY,Etsy Inc.,NASDAQ,Etsy
+EBAY,eBay Inc.,NASDAQ,eBay
+W,Wayfair Inc.,NYSE,Wayfair
+TGT,Target Corporation,NYSE,Target
+GPS,Gap Inc.,NYSE,
+LULU,Lululemon Athletica,NASDAQ,Lululemon
+CMG,Chipotle Mexican Grill,NYSE,Chipotle
+DPZ,Domino's Pizza,NYSE,Domino's
+YUM,Yum! Brands,NYSE,Yum Brands
+CELH,Celsius Holdings,NASDAQ,Celsius Holdings
+MNST,Monster Beverage,NASDAQ,Monster Beverage
+KHC,Kraft Heinz,NASDAQ,Kraft Heinz
+GIS,General Mills,NYSE,General Mills
+HSY,Hershey Company,NYSE,Hershey
+KR,Kroger Company,NYSE,Kroger
+DG,Dollar General,NYSE,Dollar General
+DLTR,Dollar Tree,NASDAQ,Dollar Tree
+BBY,Best Buy Co.,NYSE,Best Buy
+MAR,Marriott International,NASDAQ,Marriott
+HLT,Hilton Worldwide,NYSE,Hilton
+DAL,Delta Air Lines,NYSE,Delta Air Lines|Delta Airlines
+UAL,United Airlines Holdings,NASDAQ,United Airlines
+AAL,American Airlines Group,NASDAQ,American Airlines
+LUV,Southwest Airlines,NYSE,Southwest Airlines
+CCL,Carnival Corporation,NYSE,Carnival Cruise
+RCL,Royal Caribbean,NYSE,Royal Caribbean
+NCLH,Norwegian Cruise Line,NYSE,Norwegian Cruise
+FDX,FedEx Corporation,NYSE,FedEx
+UNP,Union Pacific,NYSE,Union Pacific
+CSX,CSX Corporation,NASDAQ,
+NSC,Norfolk Southern,NYSE,Norfolk Southern
+MMM,3M Company,NYSE,3M
+GD,General Dynamics,NYSE,General Dynamics
+NOC,Northrop Grumman,NYSE,Northrop Grumman|Northrop
+HII,Huntington Ingalls,NYSE,Huntington Ingalls
+LHX,L3Harris Technologies,NYSE,L3Harris
+AXON,Axon Enterprise,NASDAQ,Axon Enterprise
+KTOS,Kratos Defense,NASDAQ,Kratos
+AVAV,AeroVironment,NASDAQ,AeroVironment
+COP,ConocoPhillips,NYSE,ConocoPhillips
+OXY,Occidental Petroleum,NYSE,Occidental
+SLB,Schlumberger (SLB),NYSE,Schlumberger
+HAL,Halliburton Company,NYSE,Halliburton
+DVN,Devon Energy,NYSE,Devon Energy
+EOG,EOG Resources,NYSE,
+MPC,Marathon Petroleum,NYSE,Marathon Petroleum
+PSX,Phillips 66,NYSE,Phillips 66
+VLO,Valero Energy,NYSE,Valero
+SHEL,Shell plc,NYSE,Shell plc
+BP,BP plc,NYSE,
+ENPH,Enphase Energy,NASDAQ,Enphase
+FSLR,First Solar,NASDAQ,First Solar
+RUN,Sunrun Inc.,NASDAQ,Sunrun
+PLUG,Plug Power,NASDAQ,Plug Power
+CCJ,Cameco Corporation,NYSE,Cameco
+SMR,NuScale Power,NYSE,NuScale
+OKLO,Oklo Inc.,NYSE,Oklo
+VST,Vistra Corp.,NYSE,Vistra
+CEG,Constellation Energy,NASDAQ,Constellation Energy
+FCX,Freeport-McMoRan,NYSE,Freeport-McMoRan|Freeport
+NEM,Newmont Corporation,NYSE,Newmont
+GOLD,Barrick Gold,NYSE,Barrick
+MP,MP Materials,NYSE,MP Materials
+ALB,Albemarle Corporation,NYSE,Albemarle
+CLF,Cleveland-Cliffs,NYSE,Cleveland-Cliffs
+X,United States Steel,NYSE,US Steel|U.S. Steel
+NUE,Nucor Corporation,NYSE,Nucor
+AA,Alcoa Corporation,NYSE,Alcoa
+DOW,Dow Inc.,NYSE,
+MRNA,Moderna Inc.,NASDAQ,Moderna
+BNTX,BioNTech SE,NASDAQ,BioNTech
+NVO,Novo Nordisk,NYSE,Novo Nordisk|Novo
+HIMS,Hims & Hers Health,NYSE,Hims & Hers|Hims and Hers
+TDOC,Teladoc Health,NYSE,Teladoc
+CRSP,CRISPR Therapeutics,NASDAQ,CRISPR Therapeutics
+BIIB,Biogen Inc.,NASDAQ,Biogen
+ILMN,Illumina Inc.,NASDAQ,Illumina
+DXCM,DexCom Inc.,NASDAQ,DexCom|Dexcom
+HCA,HCA Healthcare,NYSE,HCA Healthcare
+HUM,Humana Inc.,NYSE,Humana
+AXP,American Express,NYSE,American Express|Amex
+COF,Capital One Financial,NYSE,Capital One
+DFS,Discover Financial,NYSE,Discover Financial
+ALLY,Ally Financial,NYSE,Ally Financial
+KEY,KeyCorp,NYSE,KeyCorp
+PNC,PNC Financial Services,NYSE,
+TFC,Truist Financial,NYSE,Truist
+ALL,Allstate Corporation,NYSE,Allstate
+MET,MetLife Inc.,NYSE,MetLife
+PRU,Prudential Financial,NYSE,Prudential
+AIG,American International Group,NYSE,
+KKR,KKR & Co.,NYSE,
+BX,Blackstone Inc.,NYSE,Blackstone
+APO,Apollo Global Management,NYSE,Apollo Global
+O,Realty Income,NYSE,Realty Income
+AMT,American Tower,NYSE,American Tower
+PLD,Prologis Inc.,NYSE,Prologis
+SPG,Simon Property Group,NYSE,Simon Property
+VICI,VICI Properties,NYSE,
+IT,Gartner Inc.,NYSE,Gartner
+A,Agilent Technologies,NYSE,Agilent
+CPRT,Copart Inc.,NASDAQ,Copart
+ROP,Roper Technologies,NASDAQ,Roper
+FTNT,Fortinet Inc.,NASDAQ,Fortinet
+ADSK,Autodesk Inc.,NASDAQ,Autodesk
+ANSS,Ansys Inc.,NASDAQ,Ansys
+TTD,The Trade Desk,NASDAQ,Trade Desk
+APP,AppLovin Corporation,NASDAQ,AppLovin
+CVNA,Carvana Co.,NYSE,Carvana
+OPEN,Opendoor Technologies,NASDAQ,Opendoor
+Z,Zillow Group,NASDAQ,Zillow
+GRAB,Grab Holdings,NASDAQ,
+CAVA,CAVA Group,NYSE,
+ACHR,Archer Aviation,NYSE,Archer Aviation
+JOBY,Joby Aviation,NYSE,Joby Aviation|Joby
+SERV,Serve Robotics,NASDAQ,Serve Robotics
+TEM,Tempus AI,NASDAQ,Tempus AI
+CRWV,CoreWeave Inc.,NASDAQ,CoreWeave
+NBIS,Nebius Group,NASDAQ,Nebius
+CRCL,Circle Internet Group,NYSE,Circle Internet
+HIVE,HIVE Digital Technologies,NASDAQ,
+MARA,MARA Holdings,NASDAQ,Marathon Digital
+RIOT,Riot Platforms,NASDAQ,Riot Platforms
+SPY,SPDR S&P 500 ETF,NYSEARCA,
+QQQ,Invesco QQQ Trust,NASDAQ,
+IWM,iShares Russell 2000 ETF,NYSEARCA,
+VOO,Vanguard S&P 500 ETF,NYSEARCA,
+VTI,Vanguard Total Stock Market ETF,NYSEARCA,
+ARKK,ARK Innovation ETF,NYSEARCA,
+TQQQ,ProShares UltraPro QQQ,NASDAQ,
+SQQQ,ProShares UltraPro Short QQQ,NASDAQ,
+SOXL,Direxion Semiconductor Bull 3X,NYSEARCA,

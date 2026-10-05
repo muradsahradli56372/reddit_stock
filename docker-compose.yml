@@ -1,0 +1,38 @@
+# One command: docker compose up --build
+# Dashboard: http://localhost:5173   API docs: http://localhost:8000/docs
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: reddit
+      POSTGRES_PASSWORD: reddit
+      POSTGRES_DB: reddit_stock
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reddit -d reddit_stock"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    build: { context: ., dockerfile: backend/Dockerfile }
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+psycopg://reddit:reddit@db:5432/reddit_stock
+      DATA_DIR: /app/data
+    ports: ["8000:8000"]
+    depends_on:
+      db: { condition: service_healthy }
+
+  frontend:
+    build: { context: frontend }
+    environment:
+      API_URL: http://backend:8000
+    ports: ["5173:5173"]
+    depends_on: [backend]
+
+volumes:
+  pgdata:
