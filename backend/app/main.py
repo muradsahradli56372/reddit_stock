@@ -4,9 +4,11 @@ from __future__ import annotations
 import logging
 import threading
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 
 from . import db
@@ -94,3 +96,11 @@ app = FastAPI(title="Reddit Stock Intelligence", version="0.3.0", lifespan=lifes
               description="Research tool analysing Reddit discussion of public companies. Not trading advice.")
 app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_methods=["*"], allow_headers=["*"])
 app.include_router(router)
+# Same API under /api: the dashboard calls /api/... both via the Vite dev server and when served
+# directly by this backend (below), so no Node.js is needed to use the app.
+app.include_router(router, prefix="/api", include_in_schema=False)
+
+# Pre-built dashboard (frontend/ built into app/static). Mounted last so API routes win.
+STATIC_DIR = Path(__file__).parent / "static"
+if (STATIC_DIR / "index.html").exists():
+    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="dashboard")

@@ -42,7 +42,7 @@ Requires Python 3.11+ and Node 18+.
 
 ```bash
 ./scripts/dev.sh            # macOS/Linux: creates .venv, installs deps, starts backend :8000 + dashboard :5173
-scripts\dev.bat             # Windows (cmd): same; the backend opens in its own window, keep it open
+scripts\dev.bat             # Windows (cmd): Python only, no Node.js needed -> http://localhost:8000
 scripts\live.bat            # Windows: same, but forces LIVE mode (StockTwits + ApeWisdom), no .env needed
 ```
 
@@ -56,6 +56,11 @@ pip install -r backend/requirements.txt
 cd backend && uvicorn app.main:app --port 8000          # terminal 1
 cd frontend && npm install && npx vite --port 5173      # terminal 2
 ```
+
+The backend also serves a **pre-built dashboard** at http://localhost:8000 (from `backend/app/static`),
+so Python alone is enough to use the app. Node.js is only needed to change the frontend. After editing
+`frontend/src`, rebuild it with `cd frontend && npm run build:static` (or use `npx vite` on :5173 while
+developing).
 
 ### Run the tests
 

@@ -194,3 +194,13 @@ def test_collect_endpoint(client, monkeypatch):
     from app import pipeline
     monkeypatch.setattr(pipeline, "collect_now", lambda: {"attention": {"rows": 0}})
     assert client.post("/collect/run").json() == {"attention": {"rows": 0}}
+
+
+def test_dashboard_served_by_backend_without_node(client):
+    """The pre-built dashboard is served at / and talks to /api/... on the same server."""
+    r = client.get("/")
+    assert r.status_code == 200 and "<div id=\"root\">" in r.text
+    asset = next(part.split('"')[0] for part in r.text.split('src="')[1:] if part.startswith("/assets/"))
+    assert client.get(asset).status_code == 200
+    assert client.get("/api/health").json()["status"] == "ok"
+    assert client.get("/health").json()["status"] == "ok"  # un-prefixed API still works
