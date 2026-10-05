@@ -22,7 +22,8 @@ from sqlalchemy import delete, distinct, func, select
 from sqlalchemy.orm import Session
 
 from . import api_cache, attention, disambiguation, market_data, metrics, sentiment, summary
-from .collectors.base import CollectedWeek, Collector, last_complete_week, today_local, week_start_of
+from .collectors.base import (CollectedWeek, Collector, last_complete_week, today_local, week_start_of,
+                              week_window_utc)
 from .collectors.demo import DemoCollector
 from .config import settings
 from .db import session_scope, upsert
@@ -41,6 +42,40 @@ BASELINE_WEEKS = 4
 def content_hash(text: str) -> str:
     norm = re.sub(r"\s+", " ", text.strip().lower())
     return hashlib.sha256(norm.encode("utf-8")).hexdigest()
+
+
+def week_progress(week: date, now: datetime | None = None) -> float:
+    """Fraction of the week that has elapsed (1.0 for finished weeks)."""
+    start, end = week_window_utc(week)
+    now = now or datetime.utcnow()
+    if now >= end:
+        return 1.0
+    return max((now - start).total_seconds(), 0.0) / (end - start).total_seconds()
+
+
+def purge_demo_data() -> dict:
+    """Delete everything generated in demo mode so it never mixes with real data.
+    Called on startup when a live text source is configured."""
+    from .models import WeeklyPrice as WP
+    with session_scope() as s:
+        demo_post_ids = select(Post.id).where(Post.is_demo.is_(True))
+        demo_comment_ids = select(Comment.id).where(Comment.is_demo.is_(True))
+        demo_weeks = list(s.scalars(select(WeeklyReport.week_start).where(WeeklyReport.is_demo.is_(True))))
+        n_mentions = s.execute(delete(StockMention).where(
+            StockMention.post_id.in_(demo_post_ids) | StockMention.comment_id.in_(demo_comment_ids))).rowcount
+        s.execute(delete(MentionReason).where(~MentionReason.mention_id.in_(select(StockMention.id))))
+        n_comments = s.execute(delete(Comment).where(Comment.is_demo.is_(True))).rowcount
+        n_posts = s.execute(delete(Post).where(Post.is_demo.is_(True))).rowcount
+        s.execute(delete(WeeklyStockMetric).where(WeeklyStockMetric.week_start.in_(demo_weeks)))
+        n_reports = s.execute(delete(WeeklyReport).where(WeeklyReport.is_demo.is_(True))).rowcount
+        n_snap = s.execute(delete(AttentionSnapshot).where(AttentionSnapshot.source == "demo")).rowcount
+        s.execute(delete(WP).where(WP.source == "demo"))
+    out = {"posts": n_posts, "comments": n_comments, "mentions": n_mentions, "reports": n_reports,
+           "snapshots": n_snap}
+    if any(out.values()):
+        log.info("demo data purged before live collection", extra=out)
+    api_cache.clear()
+    return out
 
 
 def get_collector() -> Collector:
@@ -346,6 +381,18 @@ def compute_week_metrics(session: Session, week: date) -> list[dict]:
     history = [metrics.aggregate_week(load_mention_rows(session, w))
                for w in weeks_with_data(session, week, BASELINE_WEEKS)]
     baselines = metrics.build_baselines(history)
+    progress = week_progress(week)
+    if progress < 1.0:
+        # Week in progress: compare with the previous weeks' PACE over the same elapsed share,
+        # otherwise every stock would look like it is collapsing on Tuesday. (Reddit counts are
+        # already per-day estimates scaled to 7 days, so they need no adjustment.)
+        f = max(progress, 1 / 7)
+        for b in baselines.values():
+            b.prev_mentions = round(b.prev_mentions * f)
+            b.prev_unique_authors = round(b.prev_unique_authors * f)
+            b.prev_comment_mentions = round(b.prev_comment_mentions * f)
+            b.avg_mentions *= f
+            b.avg_unique_authors *= f
     n_subs = len({r.subreddit for r in current_rows}) or 1
     reddit, _days = load_reddit_week(session, week)
     reddit_prev, reddit_avg = reddit_baselines(session, week) if reddit is not None else (None, None)
@@ -446,9 +493,12 @@ def build_overview(session: Session, week: date, metric_rows: list[dict]) -> dic
         .where(StockMention.week_start == week)).all()})
     methods = {r for (r,) in session.execute(select(StockMention.sentiment_method).distinct()
                                              .where(StockMention.week_start == week)).all() if r}
+    progress = week_progress(week)
     return {
         "week_start": week.isoformat(),
         "week_end": (week + timedelta(days=6)).isoformat(),
+        "in_progress": progress < 1.0,
+        "days_elapsed": round(progress * 7, 1),
         "posts": n_posts, "comments": n_comments,
         "total_mentions": len(mention_rows),
         "unique_authors": unique_authors,
@@ -464,9 +514,24 @@ def build_overview(session: Session, week: date, metric_rows: list[dict]) -> dic
 
 
 # ---------------------------------------------------------------- orchestration
+def should_collect(collector: Collector, week: date, now: datetime | None = None) -> bool:
+    """Incremental live collectors (StockTwits) only read the open week, plus the week that just
+    ended during the first day of a new week (to catch its last hours). Finished weeks are analysed
+    from what was stored while they were open: paging back through days of newer messages would
+    waste the rate limit and return a biased sample. Other collectors always collect."""
+    if not getattr(collector, "incremental", False):
+        return True
+    now = now or datetime.utcnow()
+    start, end = week_window_utc(week)
+    return now < end + timedelta(days=1)
+
+
 def process_week(collector: Collector, week: date) -> dict:
     t0 = time.monotonic()
-    data = collector.collect(week)  # network I/O happens outside the DB transaction
+    if should_collect(collector, week):
+        data = collector.collect(week)  # network I/O happens outside the DB transaction
+    else:
+        data = CollectedWeek(week, platform=getattr(collector, "name", "reddit"))
     with session_scope() as session:
         seed_companies(session)
         store_raw(session, data)
@@ -481,7 +546,7 @@ def process_week(collector: Collector, week: date) -> dict:
         text, method = summary.generate(overview, metric_rows, reasons_by_ticker(session, week, movers))
         upsert(session, WeeklyReport, [{
             "week_start": week, "overview": overview, "summary": text, "summary_method": method,
-            "is_demo": data.is_demo, "generated_at": datetime.utcnow(),
+            "is_demo": data.is_demo or getattr(collector, "name", "") == "demo", "generated_at": datetime.utcnow(),
         }], ["week_start"], ["overview", "summary", "summary_method", "is_demo", "generated_at"])
         stats.update({"week_start": week.isoformat(), "posts": len(data.posts), "comments": len(data.comments),
                       "stocks": len(metric_rows), "summary_method": method,
@@ -536,12 +601,17 @@ def collect_now() -> dict:
     out = {"attention": collect_attention([])}
     collector = get_collector()
     if getattr(collector, "incremental", False):
-        week = week_start_of(datetime.utcnow())
-        prepare_collector(collector, week)
-        data = collector.collect(week)
-        with session_scope() as session:
-            store_raw(session, data)
-        out["text"] = {"source": collector.name, "week_start": week.isoformat(), "new_items": len(data.posts)}
+        current = week_start_of(datetime.utcnow())
+        out["text"] = {"source": collector.name, "new_items": 0, "weeks": []}
+        for week in (current - timedelta(days=7), current):
+            if not should_collect(collector, week):
+                continue
+            prepare_collector(collector, week)
+            data = collector.collect(week)
+            with session_scope() as session:
+                store_raw(session, data)
+            out["text"]["new_items"] += len(data.posts)
+            out["text"]["weeks"].append(week.isoformat())
     log.info("collection finished", extra=out)
     return out
 
@@ -555,9 +625,15 @@ def run_analysis(week_start: date | None = None, collector: Collector | None = N
     if not run_lock.acquire(blocking=False):
         raise RuntimeError("An analysis run is already in progress")
     try:
-        target = week_start_of(week_start) if week_start else last_complete_week()
         collector = collector or get_collector()
-        n = max(2, settings.demo_history_weeks) if getattr(collector, "name", "") == "demo" else 2
+        is_demo = getattr(collector, "name", "") == "demo"
+        if week_start:
+            target = week_start_of(week_start)
+        elif is_demo or not getattr(collector, "incremental", False):
+            target = last_complete_week()
+        else:
+            target = week_start_of(datetime.utcnow())  # live: the week in progress (+ the one before)
+        n = max(2, settings.demo_history_weeks) if is_demo else 2
         weeks = [target - timedelta(days=7 * i) for i in range(n - 1, -1, -1)]
         log.info("analysis started", extra={"collector": getattr(collector, "name", "?"),
                                             "weeks": [w.isoformat() for w in weeks], "llm": settings.use_llm})

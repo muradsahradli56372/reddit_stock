@@ -83,7 +83,8 @@ class ApeWisdomProvider:
                 except Exception as exc:  # noqa: BLE001
                     log.warning("apewisdom filter failed", extra={"filter": flt, "error": repr(exc)})
                     break
-                rows.extend(parse_apewisdom_page(data, flt))
+                rows.extend(r for r in parse_apewisdom_page(data, flt)
+                            if r.ticker not in settings.apewisdom_exclude)
                 pages = _int(data.get("pages")) or 1
                 page += 1
         log.info("apewisdom snapshot", extra={"rows": len(rows), "filters": settings.apewisdom_filters})

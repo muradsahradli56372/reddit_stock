@@ -67,6 +67,7 @@ def health():
     provider = get_provider()
     return {"status": "ok", "demo_mode": settings.demo_mode, "llm_enabled": settings.use_llm,
             "text_source": settings.resolved_text_source, "attention_source": settings.resolved_attention_source,
+            "analysis_running": pipeline.run_lock.locked(),
             "market_data": provider.name if provider else None, "timezone": settings.report_timezone,
             "scheduler": {"enabled": settings.scheduler_enabled, "cron": settings.schedule_cron,
                           "collect_cron": settings.collect_cron},

@@ -41,7 +41,8 @@ once (`AUTO_RUN_ON_STARTUP=true`), so the dashboard opens already populated with
 Requires Python 3.11+ and Node 18+.
 
 ```bash
-./scripts/dev.sh            # creates .venv, installs deps, starts backend :8000 + dashboard :5173
+./scripts/dev.sh            # macOS/Linux: creates .venv, installs deps, starts backend :8000 + dashboard :5173
+scripts\dev.bat             # Windows (cmd): same; the backend opens in its own window, keep it open
 ```
 
 With no `DATABASE_URL` this uses a SQLite file (`data/reddit_stock.db`). To use a local Postgres,
@@ -73,10 +74,19 @@ Tests never touch the network: the Anthropic API, Reddit (PRAW) and yfinance are
    ```
 2. In `.env`: `TEXT_SOURCE=stocktwits`, `ATTENTION_SOURCE=apewisdom`, `SCHEDULER_ENABLED=true`
    (docker compose enables the scheduler by default).
+   Switching to live **deletes all demo data** from the database on the next start, so generated and real
+   data never mix.
 3. **Keep the backend running.** The collection job (`COLLECT_CRON`, default every 4 hours) takes the
    daily ApeWisdom snapshot and pulls new StockTwits messages. ApeWisdom keeps **no history**, so Reddit
    counts only exist from the day you start collecting. The first week will show
    `days_covered < 7`, and week-over-week Reddit growth appears from the second week.
+   **What the first run looks like:** the dashboard opens on the **current week, in progress** (marked
+   "(in progress)"), with real data from Monday until now. While a week is open, text comparisons with
+   the previous week are pace-adjusted: last week is scaled to the same elapsed time, so Tuesday isn't
+   compared with a full week. The first analysis runs in the background (StockTwits rate limits can make
+   it take a few minutes), and the page refreshes by itself. Finished weeks are analysed from what was
+   collected while they were open. Paging back through days of newer StockTwits messages would waste the
+   rate limit and give a biased sample.
 4. The weekly analysis runs Mondays 06:00 (`SCHEDULE_CRON`, in `REPORT_TIMEZONE`). Or use the
    **Run Analysis** button, or `POST /collect/run` to collect immediately.
 5. Optional: `ANTHROPIC_API_KEY` for LLM sentiment/reasons/disambiguation and the summary.

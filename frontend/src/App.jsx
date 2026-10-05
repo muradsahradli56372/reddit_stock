@@ -58,19 +58,36 @@ export default function App() {
     }
   }, []);
 
+  const [waiting, setWaiting] = useState(false);
+
   useEffect(() => {
-    loadWeeks()
-      .then((w) => {
-        if (w.length) setWeek(w[0].week_start);
-        else {
+    let timer;
+    const poll = () =>
+      loadWeeks()
+        .then(async (w) => {
+          if (w.length) {
+            setWaiting(false);
+            setError(null);
+            setWeek(w[0].week_start);
+            return;
+          }
           setLoading(false);
-          setError("No analysis yet. Click “Run Analysis”.");
-        }
-      })
-      .catch((e) => {
-        setLoading(false);
-        setError(`Cannot reach the API (${e.message}). Is the backend running on :8000?`);
-      });
+          const h = await api.health();
+          if (h.analysis_running) {
+            // First live run happens in the background and can take a few minutes (rate limits).
+            setWaiting(true);
+            timer = setTimeout(poll, 10000);
+          } else {
+            setWaiting(false);
+            setError("No analysis yet. Click “Run Analysis”.");
+          }
+        })
+        .catch((e) => {
+          setLoading(false);
+          setError(`Cannot reach the API (${e.message}). Is the backend running on :8000?`);
+        });
+    poll();
+    return () => clearTimeout(timer);
   }, [loadWeeks]);
 
   useEffect(() => {
@@ -89,7 +106,7 @@ export default function App() {
       if (target === week) loadWeek(target, w);
       else setWeek(target);
     } catch (e) {
-      setRunMsg(`Run failed: ${e.message}`);
+      setRunMsg(e.status === 409 ? "An analysis is already running. Please wait and refresh in a minute." : `Run failed: ${e.message}`);
     } finally {
       setRunning(false);
     }
@@ -124,7 +141,9 @@ export default function App() {
             <span className="muted small">Week</span>
             <select value={week || ""} onChange={(e) => setWeek(e.target.value)} disabled={!weeks.length}>
               {weeks.map((w) => (
-                <option key={w.week_start} value={w.week_start}>{fmtWeek(w.week_start)}</option>
+                <option key={w.week_start} value={w.week_start}>
+                  {fmtWeek(w.week_start)}{new Date(`${w.week_start}T00:00:00Z`).getTime() + 7 * 86400000 > Date.now() ? " (in progress)" : ""}
+                </option>
               ))}
             </select>
           </label>
@@ -135,6 +154,33 @@ export default function App() {
       </header>
 
       {runMsg && <div className="notice">{runMsg}</div>}
+      {waiting && (
+        <div className="notice">
+          ⏳ The first analysis is running in the background. With live sources this can take a few minutes
+          (StockTwits rate limits). This page refreshes automatically.
+        </div>
+      )}
+      {route.page === "home" && data?.report.overview.in_progress && (
+        <div className="notice">
+          This week is still in progress: <b>{data.report.overview.days_elapsed} of 7 days</b> so far. Text comparisons
+          with last week are pace-adjusted (last week scaled to the same elapsed time); Reddit counts are per-day
+          estimates. Numbers will change until the week ends.
+        </div>
+      )}
+      {route.page === "home" && data && data.stocks.length === 0 && !health?.demo_mode && (
+        <div className="notice notice-error">
+          No data has been collected for this week yet. Collection runs in the background (every few hours); click
+          “Run Analysis” to collect now. If it stays empty, run <code>python scripts/check_sources.py</code> and look at the
+          backend window for errors.
+        </div>
+      )}
+      {route.page === "home" && data?.report.overview.reddit_attention && !data.report.overview.in_progress &&
+        data.report.overview.reddit_attention.days_covered < 7 && (
+        <div className="notice">
+          Reddit counts for this week cover {data.report.overview.reddit_attention.days_covered} of 7 days (collection
+          started mid-week or the backend was off), so they are estimates from the days available.
+        </div>
+      )}
       {error && <div className="notice notice-error">{error}</div>}
       {loading && !data && <div className="loading">Loading…</div>}
 

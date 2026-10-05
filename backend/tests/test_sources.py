@@ -231,6 +231,7 @@ def test_stocktwits_pipeline_author_labels_and_platform(analysed_db):
     from app.models import Post, StockMention, Subreddit
     from app.pipeline import prepare_collector, process_week
     col = FakeStockTwits(_posts())
+    col.incremental = False  # WEEK is long finished; force collection for this test
     prepare_collector(col, WEEK)
     assert col.symbols[0:1] and "OKLO" in col.symbols  # universe includes trending
     process_week(col, WEEK)
@@ -355,3 +356,87 @@ def test_live_mode_end_to_end_with_fake_http(analysed_db, monkeypatch):
                          .join(Post, StockMention.post_id == Post.id)
                          .where(Post.reddit_id.like("st_%"), StockMention.week_start == now_week)).all()
     assert ("NVDA", "author_label") in rows
+
+
+# ---------------------------------------------------------------- live-mode first run behaviour
+def test_should_collect_only_open_or_just_ended_weeks():
+    from app.pipeline import should_collect
+    inc = FakeStockTwits([])
+    week = date(2026, 9, 28)
+    assert should_collect(inc, week, datetime(2026, 10, 1, 12))          # open week
+    assert should_collect(inc, week, datetime(2026, 10, 5, 9))           # first day after it ended
+    assert not should_collect(inc, week, datetime(2026, 10, 7, 9))       # long finished -> stored data only
+    batch = type("Batch", (), {"incremental": False})()
+    assert should_collect(batch, week, datetime(2027, 1, 1))  # non-incremental collectors always collect
+
+
+def test_week_progress():
+    from app.pipeline import week_progress
+    week = date(2026, 9, 28)
+    assert week_progress(week, datetime(2026, 10, 10)) == 1.0
+    assert week_progress(week, datetime(2026, 9, 30, 12)) == pytest.approx(2.5 / 7)
+
+
+def test_partial_week_compares_pace_not_totals(analysed_db, monkeypatch):
+    """On Wednesday a stock with the same daily pace as last week must not look like it collapsed."""
+    from app import pipeline
+    from app.collectors.base import CollectedWeek
+
+    prev_week, cur_week = date(2026, 5, 18), date(2026, 5, 25)
+    posts_prev = [parse_message(msg(70000 + i, f"2026-05-{18 + i % 7:02d}T12:00:00Z", "$PLTR contracts", f"p{i}"))
+                  for i in range(28)]  # 4/day for 7 days
+    posts_cur = [parse_message(msg(71000 + i, f"2026-05-{25 + i % 2:02d}T12:00:00Z", "$PLTR contracts", f"c{i}"))
+                 for i in range(8)]   # 4/day for the 2 days so far
+
+    class Fixed:
+        name, incremental = "stocktwits", False
+
+        def __init__(self, posts):
+            self.posts = posts
+
+        def collect(self, w):
+            return CollectedWeek(w, posts=self.posts, platform="stocktwits")
+    monkeypatch.setattr(pipeline, "week_progress",
+                        lambda w, now=None: 2 / 7 if w == cur_week else 1.0)
+    pipeline.process_week(Fixed(posts_prev), prev_week)
+    pipeline.process_week(Fixed(posts_cur), cur_week)
+    from app.models import WeeklyReport, WeeklyStockMetric
+    with session_scope() as s:
+        m = s.scalar(select(WeeklyStockMetric).where(WeeklyStockMetric.week_start == cur_week,
+                                                     WeeklyStockMetric.ticker == "PLTR"))
+        ov = s.scalar(select(WeeklyReport.overview).where(WeeklyReport.week_start == cur_week))
+    assert m.mentions == 8 and m.prev_mentions == 8  # 28 * 2/7 = pace-adjusted
+    assert m.mention_change_pct == 0.0 and m.trend_class == "STABLE"
+    assert ov["in_progress"] is True and ov["days_elapsed"] == 2.0
+
+
+def test_purge_demo_data(analysed_db):
+    """Switching to live removes every demo row (and nothing real)."""
+    from app import pipeline
+    from app.models import AttentionSnapshot, Post, WeeklyReport
+    with session_scope() as s:
+        real_before = s.scalar(select(func.count()).select_from(Post).where(Post.is_demo.is_(False)))
+        assert s.scalar(select(func.count()).select_from(Post).where(Post.is_demo.is_(True))) > 0
+    out = pipeline.purge_demo_data()
+    assert out["posts"] > 0 and out["reports"] > 0
+    with session_scope() as s:
+        assert s.scalar(select(func.count()).select_from(Post).where(Post.is_demo.is_(True))) == 0
+        assert s.scalar(select(func.count()).select_from(WeeklyReport).where(WeeklyReport.is_demo.is_(True))) == 0
+        assert s.scalar(select(func.count()).select_from(AttentionSnapshot)
+                        .where(AttentionSnapshot.source == "demo")) == 0
+        assert s.scalar(select(func.count()).select_from(Post).where(Post.is_demo.is_(False))) == real_before
+    # restore the demo dataset for any later test
+    from app.collectors.demo import DemoCollector
+    from app.pipeline import run_analysis
+    from .conftest import ANCHOR
+    run_analysis(ANCHOR, collector=DemoCollector(anchor_week=ANCHOR))
+
+
+def test_apewisdom_excludes_futures(monkeypatch):
+    monkeypatch.setattr(settings, "apewisdom_filters", ["Daytrading"])
+
+    def handler(req):
+        return httpx.Response(200, json={"pages": 1, "results": [
+            {"ticker": "ES", "mentions": 6}, {"ticker": "MSFT", "mentions": 1}]})
+    rows = ApeWisdomProvider(client_for(handler)).snapshot(WEEK)
+    assert [r.ticker for r in rows] == ["MSFT"]

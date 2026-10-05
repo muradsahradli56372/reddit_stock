@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -62,14 +63,18 @@ async def lifespan(_app: FastAPI):
     log.info("startup", extra={"db": db.engine.url.render_as_string(hide_password=True),
                                "demo_mode": settings.demo_mode, "llm": settings.use_llm,
                                "timezone": settings.report_timezone})
+    if not settings.demo_mode:
+        from .pipeline import purge_demo_data
+        purge_demo_data()  # never mix generated demo data with real data
     if settings.auto_run_on_startup:
         from .models import WeeklyReport
-        from .pipeline import run_analysis
         with db.session_scope() as s:
             empty = s.scalar(select(WeeklyReport.id).limit(1)) is None
         if empty:
-            log.info("No reports yet: running initial analysis")
-            run_analysis()
+            # In the background: a live first run can take minutes (rate limits); the API stays up
+            # and /health reports analysis_running so the dashboard can show progress.
+            log.info("No reports yet: running initial analysis in the background")
+            threading.Thread(target=scheduled_run, name="initial-analysis", daemon=True).start()
     sched = _start_scheduler()
     yield
     if sched:

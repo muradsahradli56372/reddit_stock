@@ -40,6 +40,9 @@ def _communities(m: dict) -> int:
 def template_summary(overview: dict, metrics: list[dict], reasons: dict | None = None) -> dict:
     data, interp, spec = [], [], []
     st = overview.get("sentiment", {})
+    if overview.get("in_progress"):
+        data.append(f"Week in progress: {overview.get('days_elapsed')} of 7 days so far. Text comparisons with "
+                    "the previous week are pace-adjusted (previous counts scaled to the same elapsed time).")
     data.append(
         f"{overview['total_mentions']} stock mentions across {overview['stocks_detected']} tickers, "
         f"from {overview['posts']} posts and {overview['comments']} comments by "

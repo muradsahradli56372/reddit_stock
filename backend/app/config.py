@@ -56,6 +56,9 @@ class Settings:
     # ApeWisdom: which filters (mostly subreddit names) to snapshot; total = sum of these.
     apewisdom_filters: list[str] = field(default_factory=lambda: _list(
         "APEWISDOM_FILTERS", "wallstreetbets,stocks,investing,options,Daytrading"))
+    # Symbols ApeWisdom reports that are futures/crypto, not stocks (e.g. ES = S&P 500 e-mini futures)
+    apewisdom_exclude: set[str] = field(default_factory=lambda: {t.upper() for t in _list(
+        "APEWISDOM_EXCLUDE", "ES,NQ,YM,RTY,MES,MNQ,CL,GC,SI,NG,ZB,ZN,BTC,ETH,SOL,XRP,DOGE")})
     apewisdom_max_pages: int = field(default_factory=lambda: int(os.getenv("APEWISDOM_MAX_PAGES", "3")))
     # Tickers below this estimated weekly Reddit mention count are not listed on their own.
     reddit_min_weekly_mentions: int = field(default_factory=lambda: int(os.getenv("REDDIT_MIN_WEEKLY_MENTIONS", "20")))
