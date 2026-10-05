@@ -26,11 +26,12 @@ class HttpError(RuntimeError):
 
 class JsonClient:
     def __init__(self, transport: httpx.BaseTransport | None = None, sleep: Callable[[float], Any] = time.sleep,
-                 max_retries: int | None = None, timeout: float = 20.0):
+                 max_retries: int | None = None, timeout: float = 20.0, max_sleep: float = 300.0):
         self._client = httpx.Client(transport=transport, timeout=timeout, follow_redirects=True,
                                     headers={"User-Agent": settings.http_user_agent, "Accept": "application/json"})
         self._sleep = sleep
         self.max_retries = max_retries or settings.reddit_max_retries
+        self.max_sleep = max_sleep
         self.requests = 0
 
     def get_json(self, url: str, params: dict | None = None) -> Any:
@@ -54,7 +55,9 @@ class JsonClient:
                 delay = float(retry_after) if retry_after and retry_after.isdigit() else 2.0 * 2 ** attempt
                 log.warning("rate limited / server error, retrying",
                             extra={"url": url, "status": r.status_code, "delay_s": delay})
-                self._sleep(min(delay, 300))
+                if delay > self.max_sleep:
+                    raise HttpError(url, r.status_code, f"Retry-After {delay:.0f}s exceeds {self.max_sleep:.0f}s")
+                self._sleep(delay)
                 continue
             raise HttpError(url, r.status_code, r.text)
         raise RuntimeError("unreachable")

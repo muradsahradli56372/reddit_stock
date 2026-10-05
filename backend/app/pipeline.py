@@ -36,6 +36,14 @@ from .reference import get_reference
 
 log = logging.getLogger(__name__)
 run_lock = threading.Lock()
+# What the current run is doing, for /health and the dashboard ({} when idle).
+progress: dict = {}
+
+
+def set_progress(step: str | None, **detail) -> None:
+    progress.clear()
+    if step:
+        progress.update({"step": step, "since": datetime.utcnow().isoformat(timespec="seconds"), **detail})
 BASELINE_WEEKS = 4
 # Bump when the analysis logic changes; reports made by older logic are recomputed on startup.
 ANALYSIS_VERSION = 4
@@ -565,6 +573,7 @@ def process_week(collector: Collector, week: date) -> dict:
     t0 = time.monotonic()
     if should_collect(collector, week):
         data = collector.collect(week)  # network I/O happens outside the DB transaction
+        set_progress(f"Analysing week of {week.isoformat()}")
         if getattr(collector, "incremental", False):
             with session_scope() as s:
                 record_collection_run(s, collector.name, week)
@@ -620,6 +629,14 @@ def stocktwits_universe(session: Session, now_week: date) -> list[str]:
     return ordered[: n + len(settings.stocktwits_watchlist)]
 
 
+def _track_collector(collector, week: date) -> None:
+    if hasattr(collector, "on_progress"):
+        def cb(done, total, _w=week.isoformat()):
+            set_progress(f"Reading StockTwits messages for week of {_w}", requests=f"{done}/{total}")
+        collector.on_progress = cb
+        set_progress(f"Reading StockTwits messages for week of {week.isoformat()}", requests="0")
+
+
 def prepare_collector(collector: Collector, week: date) -> None:
     """Give incremental collectors their universe and the ids already stored for the week."""
     if getattr(collector, "name", "") != "stocktwits":
@@ -635,7 +652,20 @@ def prepare_collector(collector: Collector, week: date) -> None:
 
 def collect_now() -> dict:
     """Light job for the scheduler (COLLECT_CRON): snapshot Reddit attention for today and pull new
-    text for the CURRENT week (stored raw; analysed when the week is complete)."""
+    text for the CURRENT week (stored raw; analysed when the week is complete).
+    Skipped while an analysis runs (the analysis collects too)."""
+    if not run_lock.acquire(blocking=False):
+        log.info("collection skipped: an analysis is running")
+        return {"skipped": "analysis running"}
+    try:
+        return _collect_now()
+    finally:
+        set_progress(None)
+        run_lock.release()
+
+
+def _collect_now() -> dict:
+    set_progress("Collecting Reddit counts (ApeWisdom)")
     out = {"attention": collect_attention([])}
     collector = get_collector()
     if getattr(collector, "incremental", False):
@@ -645,6 +675,7 @@ def collect_now() -> dict:
             if not should_collect(collector, week):
                 continue
             prepare_collector(collector, week)
+            _track_collector(collector, week)
             data = collector.collect(week)
             with session_scope() as session:
                 store_raw(session, data)
@@ -676,15 +707,19 @@ def run_analysis(week_start: date | None = None, collector: Collector | None = N
         weeks = [target - timedelta(days=7 * i) for i in range(n - 1, -1, -1)]
         log.info("analysis started", extra={"collector": getattr(collector, "name", "?"),
                                             "weeks": [w.isoformat() for w in weeks], "llm": settings.use_llm})
+        set_progress("Collecting Reddit counts (ApeWisdom)")
         att = collect_attention([weeks[0] + timedelta(days=i) for i in range(7 * len(weeks))])
         results = []
-        for w in weeks:
+        for i, w in enumerate(weeks, start=1):
+            set_progress(f"Week {i} of {len(weeks)}: {w.isoformat()}")
             prepare_collector(collector, w)
+            _track_collector(collector, w)
             results.append(process_week(collector, w))
         return {"mode": "demo" if getattr(collector, "name", "") == "demo" else "live",
                 "text_source": getattr(collector, "name", "?"), "attention": att,
                 "llm": settings.use_llm, "weeks": results}
     finally:
+        set_progress(None)
         api_cache.clear()
         run_lock.release()
 

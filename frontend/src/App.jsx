@@ -73,10 +73,11 @@ export default function App() {
           }
           setLoading(false);
           const h = await api.health();
+          setHealth(h);
           if (h.analysis_running) {
             // First live run happens in the background and can take a few minutes (rate limits).
             setWaiting(true);
-            timer = setTimeout(poll, 10000);
+            timer = setTimeout(poll, 5000);
           } else {
             setWaiting(false);
             setError("No analysis yet. Click “Run Analysis”.");
@@ -109,7 +110,7 @@ export default function App() {
           else setWeek(w[0].week_start);
         }
       }
-    }, 10000);
+    }, 5000);
     return () => clearTimeout(t);
   }, [health, weeks, week, loadWeeks, loadWeek]);
 
@@ -117,15 +118,11 @@ export default function App() {
     setRunning(true);
     setRunMsg(null);
     try {
-      const res = await api.run();
-      const last = res.weeks[res.weeks.length - 1];
-      setRunMsg(`Analysis complete: ${last.posts} posts, ${last.comments} comments, ${last.stocks} stocks (${res.mode} mode).`);
-      const w = await loadWeeks();
-      const target = last.week_start;
-      if (target === week) loadWeek(target, w);
-      else setWeek(target);
+      // Starts in the background (202); progress is polled from /health below.
+      await api.run();
+      setHealth((h) => ({ ...(h || {}), analysis_running: true, progress: { step: "Starting…" } }));
     } catch (e) {
-      setRunMsg(e.status === 409 ? "An analysis is already running. Please wait and refresh in a minute." : `Run failed: ${e.message}`);
+      setRunMsg(e.status === 409 ? "An analysis is already running — progress is shown below." : `Run failed: ${e.message}`);
     } finally {
       setRunning(false);
     }
@@ -166,8 +163,8 @@ export default function App() {
               ))}
             </select>
           </label>
-          <button className="btn" onClick={runAnalysis} disabled={running}>
-            {running ? "Running…" : "Run Analysis"}
+          <button className="btn" onClick={runAnalysis} disabled={running || health?.analysis_running}>
+            {running || health?.analysis_running ? "Running…" : "Run Analysis"}
           </button>
         </div>
       </header>
@@ -185,15 +182,20 @@ export default function App() {
       {health?.config?.env_file === "found_as_txt" && (
         <div className="notice notice-warn">Your settings file is named <code>.env.txt</code>. It works, but please rename it to <code>.env</code>.</div>
       )}
-      {health?.analysis_running && weeks.length > 0 && !running && (
-        <div className="notice">⏳ An analysis is running in the background (for example after an update). The results
-          below are from the previous run and will refresh automatically when it finishes.</div>
+      {health?.analysis_running && weeks.length > 0 && (
+        <div className="notice">
+          ⏳ <b>Analysis running:</b> {health.progress?.step || "working…"}
+          {health.progress?.requests && <> · StockTwits requests {health.progress.requests}</>}
+          <div className="muted small">Live runs take a few minutes. The results below are from the previous run and
+            refresh automatically when it finishes. You can keep using the page.</div>
+        </div>
       )}
       {runMsg && <div className="notice">{runMsg}</div>}
       {waiting && (
         <div className="notice">
-          ⏳ The first analysis is running in the background. With live sources this can take a few minutes
-          (StockTwits rate limits). This page refreshes automatically.
+          ⏳ The first analysis is running in the background{health?.progress?.step ? <>: <b>{health.progress.step}</b></> : ""}
+          {health?.progress?.requests && <> · StockTwits requests {health.progress.requests}</>}. With live sources this can
+          take a few minutes (StockTwits rate limits). This page refreshes automatically.
         </div>
       )}
       {route.page === "home" && data?.report.overview.in_progress && (

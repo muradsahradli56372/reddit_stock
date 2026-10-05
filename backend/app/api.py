@@ -1,10 +1,12 @@
 """HTTP API. All numbers come from the database; nothing is computed by an LLM here."""
 from __future__ import annotations
 
+import logging
+import threading
 from collections import defaultdict
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
@@ -69,6 +71,7 @@ def health():
     return {"status": "ok", "demo_mode": settings.demo_mode, "llm_enabled": settings.use_llm,
             "text_source": settings.resolved_text_source, "attention_source": settings.resolved_attention_source,
             "analysis_running": pipeline.run_lock.locked(),
+            "progress": dict(pipeline.progress),
             "config": {"env_file": config.ENV_STATUS, "path": str(config.ENV_FILE),
                        "text_source_setting": settings.text_source},
             "market_data": provider.name if provider else None, "timezone": settings.report_timezone,
@@ -358,13 +361,28 @@ class RunRequest(BaseModel):
 
 
 @router.post("/analysis/run")
-def run(req: RunRequest | None = None):
+def run(response: Response, req: RunRequest | None = None, wait: bool = False):
+    """Start an analysis. By default it runs in the background and this returns 202 at once
+    (live runs take minutes); poll /health (analysis_running, progress). wait=true blocks and
+    returns the result (used by tests and scripts)."""
     week = req.week_start if req else None
     if week is not None and week > date.today():
         raise HTTPException(422, "week_start cannot be in the future")
-    try:
-        return pipeline.run_analysis(week)
-    except RuntimeError as exc:
-        if "already in progress" in str(exc):
-            raise HTTPException(409, str(exc))
-        raise
+    if pipeline.run_lock.locked():
+        raise HTTPException(409, "An analysis run is already in progress")
+    if wait:
+        try:
+            return pipeline.run_analysis(week)
+        except RuntimeError as exc:
+            if "already in progress" in str(exc):
+                raise HTTPException(409, str(exc))
+            raise
+
+    def background():
+        try:
+            pipeline.run_analysis(week)
+        except Exception:  # noqa: BLE001
+            logging.getLogger(__name__).exception("background analysis failed")
+    threading.Thread(target=background, name="analysis", daemon=True).start()
+    response.status_code = 202
+    return {"status": "started"}

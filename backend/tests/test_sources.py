@@ -335,7 +335,7 @@ def test_live_mode_end_to_end_with_fake_http(analysed_db, monkeypatch):
 
     real_init = http_client.JsonClient.__init__
 
-    def fake_init(self, transport=None, sleep=None, max_retries=None, timeout=20.0):
+    def fake_init(self, transport=None, sleep=None, max_retries=None, timeout=20.0, max_sleep=300.0):
         real_init(self, transport=httpx.MockTransport(handler), sleep=lambda s: None, max_retries=2)
     monkeypatch.setattr(http_client.JsonClient, "__init__", fake_init)
 
@@ -546,3 +546,73 @@ def test_stocktwits_week_without_run_record_is_partial(analysed_db):
     with session_scope() as s:
         assert pipeline.text_coverage(s, w)["complete"] is False
         assert pipeline.text_coverage(s, date(2025, 1, 6))["complete"] is True  # no StockTwits data -> complete
+
+
+
+# ---------------------------------------------------------------- rate limits & progress
+def test_hourly_limit_stops_collection_instead_of_waiting(monkeypatch):
+    from app.collectors import stocktwits as st_mod
+    monkeypatch.setattr(settings, "stocktwits_request_delay", 0)
+    monkeypatch.setattr(settings, "stocktwits_hourly_limit", 3)
+    st_mod._recent_requests.clear()
+    calls = []
+
+    def handler(req):
+        calls.append(req.url.path)
+        return httpx.Response(200, json={"messages": [msg(len(calls) * 100, "2026-06-03T00:00:00Z")]})
+    c = StockTwitsCollector(client=client_for(handler), sleep=lambda s: None)
+    c.symbols = ["A1", "A2", "A3", "A4", "A5"]
+    out = c.collect(WEEK)
+    assert len(calls) == 3 and out.stats["stopped"] == "hourly request limit reached"
+    st_mod._recent_requests.clear()
+
+
+def test_429_stops_whole_run(monkeypatch):
+    from app.collectors import stocktwits as st_mod
+    monkeypatch.setattr(settings, "stocktwits_request_delay", 0)
+    st_mod._recent_requests.clear()
+    calls = []
+
+    def handler(req):
+        calls.append(1)
+        return httpx.Response(429, headers={"Retry-After": "900"})  # longer than we are willing to wait
+    c = StockTwitsCollector(client=client_for(handler), sleep=lambda s: None)
+    c.client.max_sleep = 30
+    c.symbols = ["NVDA", "TSLA", "AAPL"]
+    out = c.collect(WEEK)
+    assert out.stats["stopped"].startswith("rate limited") and len(calls) == 1
+    st_mod._recent_requests.clear()
+
+
+def test_collect_now_skips_while_analysis_runs():
+    from app import pipeline
+    assert pipeline.run_lock.acquire(blocking=False)
+    try:
+        assert pipeline.collect_now() == {"skipped": "analysis running"}
+    finally:
+        pipeline.run_lock.release()
+
+
+def test_run_endpoint_is_async_and_reports_progress(analysed_db, monkeypatch):
+    import threading as th
+    from fastapi.testclient import TestClient
+    from app import pipeline
+    from app.main import app
+    gate = th.Event()
+
+    def slow_run(week=None):
+        with pipeline.run_lock:
+            pipeline.set_progress("Week 1 of 2: test")
+            gate.wait(5)
+            pipeline.set_progress(None)
+    monkeypatch.setattr(pipeline, "run_analysis", slow_run)
+    with TestClient(app) as c:
+        r = c.post("/analysis/run")
+        assert r.status_code == 202 and r.json() == {"status": "started"}
+        for _ in range(50):
+            h = c.get("/health").json()
+            if h["analysis_running"]:
+                break
+        assert h["analysis_running"] and h["progress"]["step"] == "Week 1 of 2: test"
+        assert c.post("/analysis/run").status_code == 409
+        gate.set()

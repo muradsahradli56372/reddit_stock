@@ -89,14 +89,14 @@ def test_weekly_report(client):
 
 
 def test_run_analysis_endpoint(client):
-    r = client.post("/analysis/run", json={"week_start": ANCHOR.isoformat()})
+    r = client.post("/analysis/run", params={"wait": True}, json={"week_start": ANCHOR.isoformat()})
     assert r.status_code == 200
     weeks = [w["week_start"] for w in r.json()["weeks"]]
     assert weeks[-2:] == [PREV.isoformat(), ANCHOR.isoformat()] and weeks == sorted(weeks)
 
 
 def test_run_analysis_rejects_future(client):
-    assert client.post("/analysis/run", json={"week_start": "2999-01-04"}).status_code == 422
+    assert client.post("/analysis/run", params={"wait": True}, json={"week_start": "2999-01-04"}).status_code == 422
 
 
 # ---------------------------------------------------------------- Phase 2 endpoints
@@ -156,7 +156,7 @@ def test_response_cache_hits_and_clears(client):
     client.get("/stocks/PLTR")
     client.get("/stocks/PLTR")
     assert api_cache.stats["hits"] == before["hits"] + 1
-    client.post("/analysis/run", json={"week_start": ANCHOR.isoformat()})
+    client.post("/analysis/run", params={"wait": True}, json={"week_start": ANCHOR.isoformat()})
     client.get("/stocks/PLTR")
     assert api_cache.stats["misses"] == before["misses"] + 2  # cache was cleared by the run
 

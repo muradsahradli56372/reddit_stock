@@ -78,6 +78,9 @@ class Settings:
         "STOCKTWITS_WATCHLIST", "NVDA,TSLA,AAPL,PLTR,AMD,MSFT,AMZN,META,GME,SOFI,RKLB,ASTS,HOOD"))
     stocktwits_max_pages: int = field(default_factory=lambda: int(os.getenv("STOCKTWITS_MAX_PAGES_PER_SYMBOL", "10")))
     stocktwits_max_requests: int = field(default_factory=lambda: int(os.getenv("STOCKTWITS_MAX_REQUESTS_PER_RUN", "180")))
+    # Never exceed this many StockTwits requests in any rolling hour (unauthenticated limit ~200/h);
+    # when reached, collection stops and continues in the next scheduled run instead of waiting.
+    stocktwits_hourly_limit: int = field(default_factory=lambda: int(os.getenv("STOCKTWITS_HOURLY_LIMIT", "190")))
     stocktwits_request_delay: float = field(default_factory=lambda: float(os.getenv("STOCKTWITS_REQUEST_DELAY", "1.0")))
     http_user_agent: str = field(default_factory=lambda: os.getenv(
         "HTTP_USER_AGENT", "Mozilla/5.0 (compatible; reddit-stock-intel/0.3; research use)"))

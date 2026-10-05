@@ -22,7 +22,9 @@ Limits (be honest about them):
 from __future__ import annotations
 
 import logging
+import threading
 import time
+from collections import deque
 from datetime import date, datetime, timezone
 
 from ..config import settings
@@ -31,6 +33,23 @@ from .base import CollectedWeek, RawPost, week_window_utc
 
 log = logging.getLogger(__name__)
 BASE = "https://api.stocktwits.com/api/2"
+
+# Request timestamps shared by every collector instance in this process (rolling 1-hour window).
+_recent_requests: deque[float] = deque()
+_recent_lock = threading.Lock()
+
+
+def hourly_requests_left(now: float | None = None) -> int:
+    now = now or time.monotonic()
+    with _recent_lock:
+        while _recent_requests and now - _recent_requests[0] > 3600:
+            _recent_requests.popleft()
+        return settings.stocktwits_hourly_limit - len(_recent_requests)
+
+
+def _note_request() -> None:
+    with _recent_lock:
+        _recent_requests.append(time.monotonic())
 PLATFORM = "stocktwits"
 
 
@@ -77,7 +96,9 @@ class StockTwitsCollector:
     incremental = True  # safe to call repeatedly; stops at already-stored messages
 
     def __init__(self, client: JsonClient | None = None, sleep=time.sleep):
-        self.client = client or JsonClient(sleep=sleep)
+        # Short retries only: when StockTwits rate-limits us we stop and resume next run, not sleep for minutes.
+        self.client = client or JsonClient(sleep=sleep, max_retries=2, max_sleep=30)
+        self.on_progress = None  # optional callable(done_requests, budget)
         self._sleep = sleep
         self.symbols: list[str] = []  # set by the pipeline before collect()
         self.known_ids: set[str] = set()  # reddit_id values already stored ("st_<id>")
@@ -104,21 +125,37 @@ class StockTwitsCollector:
         state = {sym: {"messages": 0, "pages": 0, "window_reached": False, "error": None, "max_id": None,
                        "done": False} for sym in symbols}
 
-        while budget > 0:
+        stopped = None  # reason the whole run stopped early (rate limit)
+        total_budget = budget
+        while budget > 0 and not stopped:
             active = [sym for sym in symbols if not state[sym]["done"]]
             if not active:
                 break
             for sym in active:
                 if budget <= 0:
                     break
+                if hourly_requests_left() <= 0:
+                    stopped = "hourly request limit reached"
+                    break
                 st = state[sym]
                 params = {"max": st["max_id"]} if st["max_id"] else None
                 budget -= 1
                 st["pages"] += 1
+                _note_request()
+                done = total_budget - budget
+                if self.on_progress:
+                    self.on_progress(done, total_budget)
+                if done % 30 == 0:
+                    log.info("stocktwits progress", extra={"week_start": week_start.isoformat(),
+                                                           "requests": f"{done}/{total_budget}",
+                                                           "messages": len(out.posts)})
                 try:
                     data = self.client.get_json(f"{BASE}/streams/symbol/{sym.replace('.', '-')}.json", params)
                 except HttpError as exc:
                     st["error"], st["done"] = f"HTTP {exc.status}", True
+                    if exc.status == 429:
+                        stopped = "rate limited by StockTwits (HTTP 429)"
+                        break
                     continue
                 except Exception as exc:  # noqa: BLE001
                     st["error"], st["done"] = repr(exc), True
@@ -159,6 +196,10 @@ class StockTwitsCollector:
             if st["error"]:
                 log.warning("stocktwits symbol failed", extra={"symbol": sym, **st})
         out.stats["requests"] = settings.stocktwits_max_requests - budget
+        if stopped:
+            out.stats["stopped"] = stopped
+            log.warning("stocktwits collection stopped early; it continues in the next scheduled collection",
+                        extra={"reason": stopped, "unread_symbols": len(unread)})
         if unread:
             log.warning("stocktwits request budget exhausted before reading some symbols",
                         extra={"unread": unread})
