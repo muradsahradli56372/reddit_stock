@@ -111,17 +111,49 @@ def build_baselines(history: list[dict[str, StockWeek]]) -> dict[str, Baseline]:
 
 
 def build_metric_rows(current: dict[str, StockWeek], baselines: dict[str, Baseline],
-                      subreddits_in_dataset: int) -> list[dict]:
-    """Produce one metrics dict per ticker mentioned this week, ranked by mentions."""
+                      subreddits_in_dataset: int, reddit: dict | None = None,
+                      reddit_prev: dict | None = None, reddit_avg: dict | None = None,
+                      reddit_min_mentions: float = 20) -> list[dict]:
+    """One metrics dict per ticker, ranked by attention.
+
+    Text sources (StockTwits / Reddit text / demo) give `current`. Count-only Reddit attention
+    (ApeWisdom) is optional:
+      reddit       {ticker: RedditWeek} for this week, or None when the week has no coverage
+      reddit_prev  {ticker: est. mentions} for the previous week, or None when it had no coverage
+      reddit_avg   {ticker: avg est. mentions} over earlier covered weeks, or None when none
+    Tickers seen only on Reddit are included when their estimate >= reddit_min_mentions.
+    Ranking: by Reddit mentions when this week has Reddit coverage, else by text mentions.
+    """
     rows = []
     eligible = [s.avg_engagement for s in current.values() if s.mentions >= signals.MIN_MENTIONS]
     median_eng = statistics.median(eligible) if eligible else 0.0
-    for tk, s in current.items():
+    tickers = set(current)
+    reddit_communities: set[str] = set()
+    median_upm = 0.0
+    reddit_max = None
+    if reddit is not None:
+        tickers |= {tk for tk, w in reddit.items() if w.mentions >= reddit_min_mentions}
+        for w in reddit.values():
+            reddit_communities |= {c for c, v in w.distribution.items() if v > 0}
+        upms = [w.upvotes / w.mentions for w in reddit.values() if w.mentions >= signals.REDDIT_MIN_MENTIONS]
+        median_upm = statistics.median(upms) if upms else 0.0
+    reddit_max = max((w.mentions for w in reddit.values()), default=0.0) if reddit is not None else None
+    n_communities = subreddits_in_dataset + len(reddit_communities)
+    for tk in tickers:
+        s = current.get(tk) or StockWeek(tk)
         b = baselines.get(tk, Baseline())
+        rw = reddit.get(tk) if reddit is not None else None
+        r_cur = (rw.mentions if rw else 0.0) if reddit is not None else None
+        r_prev = reddit_prev.get(tk, 0.0) if (reddit_prev is not None and reddit is not None) else None
+        r_base = reddit_avg.get(tk, 0.0) if (reddit_avg is not None and reddit is not None) else None
+        # union of names: a subreddit seen in both the text sample and the Reddit counts counts once
+        communities = len(set(s.subreddits) | ({c for c, v in rw.distribution.items() if v > 0} if rw else set()))
+        upm = (rw.upvotes / rw.mentions) if rw and rw.mentions else 0.0
         early = signals.early_signal_score(s.mentions, b.avg_mentions, s.unique_authors, b.avg_unique_authors,
-                                           len(s.subreddits), s.avg_engagement, median_eng)
+                                           communities, s.avg_engagement, median_eng,
+                                           r_cur, r_base, upm, median_upm, reddit_max)
         score = trend.trend_score(s.mentions, b.avg_mentions, s.unique_authors, b.avg_unique_authors,
-                                  len(s.subreddits), subreddits_in_dataset)
+                                  communities, n_communities, r_cur, r_base)
         rows.append({
             "ticker": tk,
             "mentions": s.mentions,
@@ -145,12 +177,21 @@ def build_metric_rows(current: dict[str, StockWeek], baselines: dict[str, Baseli
             "author_change_pct": pct_change(s.unique_authors, b.prev_unique_authors),
             "comment_change_pct": pct_change(s.comment_mentions, b.prev_comment_mentions),
             "trend_score": score,
-            "trend_class": trend.classify(score, s.mentions, b.avg_mentions),
+            "trend_class": trend.classify(score, s.mentions, b.avg_mentions, r_cur, r_base),
             "avg_engagement": round(s.avg_engagement, 1),
             "early_signal_score": early,
-            "is_early_signal": signals.is_early_signal(early, s.mentions, b.avg_mentions),
+            "is_early_signal": signals.is_early_signal(early, s.mentions, b.avg_mentions, r_cur, r_base),
+            "reddit_mentions": r_cur,
+            "reddit_upvotes": rw.upvotes if rw else (0.0 if reddit is not None else None),
+            "reddit_prev_mentions": r_prev,
+            "reddit_change_pct": pct_change(r_cur, r_prev) if (r_cur is not None and r_prev is not None) else None,
+            "reddit_distribution": rw.distribution if rw else ({} if reddit is not None else None),
+            "reddit_days_covered": rw.days_covered if rw else None,
         })
-    rows.sort(key=lambda r: (-r["mentions"], -r["unique_authors"], r["ticker"]))
+    if reddit is not None:
+        rows.sort(key=lambda r: (-(r["reddit_mentions"] or 0), -r["mentions"], r["ticker"]))
+    else:
+        rows.sort(key=lambda r: (-r["mentions"], -r["unique_authors"], r["ticker"]))
     for i, r in enumerate(rows, start=1):
         r["rank"] = i
     return rows

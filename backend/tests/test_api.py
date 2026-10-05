@@ -159,3 +159,38 @@ def test_response_cache_hits_and_clears(client):
     client.post("/analysis/run", json={"week_start": ANCHOR.isoformat()})
     client.get("/stocks/PLTR")
     assert api_cache.stats["misses"] == before["misses"] + 2  # cache was cleared by the run
+
+
+# ---------------------------------------------------------------- v0.3: ApeWisdom + StockTwits
+def test_health_reports_sources(client):
+    h = client.get("/health").json()
+    assert h["text_source"] == "demo" and h["attention_source"] == "demo"
+    assert h["scheduler"]["collect_cron"]
+
+
+def test_reddit_attention_in_stocks_and_overview(client):
+    stocks = client.get("/stocks").json()["stocks"]
+    ranks = [s["rank"] for s in stocks]
+    assert ranks == sorted(ranks)  # default order = attention rank
+    by = {s["ticker"]: s for s in stocks}
+    assert by["OKLO"]["mentions"] == 0 and by["OKLO"]["reddit_mentions"] > 100  # Reddit-only ticker
+    assert by["RKLB"]["reddit_change_pct"] > 100 and by["RKLB"]["reddit_days_covered"] == 7
+    ov = client.get("/weekly-report").json()["overview"]["reddit_attention"]
+    assert ov["source"] == "demo" and ov["days_covered"] == 7 and ov["total_mentions"] > 0
+
+
+def test_reddit_communities(client):
+    comms = client.get("/subreddits").json()["reddit_communities"]
+    assert comms and comms[0]["community"] == "wallstreetbets"
+    assert all(c["top_tickers"] for c in comms)
+
+
+def test_history_has_reddit_series(client):
+    weeks = client.get("/stocks/OKLO/history").json()["weeks"]
+    assert weeks[-1]["reddit_mentions"] > 3 * weeks[-2]["reddit_mentions"]
+
+
+def test_collect_endpoint(client, monkeypatch):
+    from app import pipeline
+    monkeypatch.setattr(pipeline, "collect_now", lambda: {"attention": {"rows": 0}})
+    assert client.post("/collect/run").json() == {"attention": {"rows": 0}}

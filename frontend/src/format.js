@@ -1,4 +1,7 @@
-export const fmtInt = (n) => (n ?? 0).toLocaleString("en-US");
+export const fmtInt = (n) => Math.round(n ?? 0).toLocaleString("en-US");
+
+// Text communities are subreddits or whole platforms (StockTwits).
+export const community = (name) => (name === "stocktwits" ? "StockTwits" : `r/${name}`);
 
 export const fmtPct = (n, digits = 0) => (n == null ? "–" : `${n.toFixed(digits)}%`);
 

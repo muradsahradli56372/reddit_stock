@@ -25,9 +25,18 @@ baseline_a = same for unique authors
        w = min(1, max(current, baseline) / 15)
        score = 50 + (100 * core - 50) * w
 
+Two sources (v0.3)
+------------------
+When count-only Reddit attention (ApeWisdom) is available for this AND earlier weeks, its
+growth joins the core:  core = 0.6 * text_core + 0.4 * s_reddit   (s_reddit uses k = 20,
+because Reddit counts are larger). Volume weight uses whichever source is bigger
+(text / 15, Reddit / 60). Breadth counts communities on both platforms. Without Reddit data the
+formula is exactly the single-source one above.
+
 Classes
 -------
-EMERGING  score >= 75 AND mentions >= 8 AND mentions grew >= 100% (or are new)
+EMERGING  score >= 75 AND enough volume (text >= 8 or Reddit >= 30) AND mentions at least
+          doubled (or are new) on at least one source
 RISING    score >= 60
 COOLING   score <= 40
 STABLE    otherwise
@@ -40,31 +49,55 @@ SMOOTHING = 5.0
 FULL_VOLUME = 15.0
 MIN_EMERGING_MENTIONS = 8
 W_MENTIONS, W_AUTHORS = 0.6, 0.4
+REDDIT_SMOOTHING = 20.0
+REDDIT_FULL_VOLUME = 60.0
+REDDIT_MIN_EMERGING = 30
+W_TEXT, W_REDDIT = 0.6, 0.4
 
 
-def _growth_component(current: float, baseline: float) -> float:
-    g = math.log2((current + SMOOTHING) / (baseline + SMOOTHING))
+def _growth_component(current: float, baseline: float, k: float = SMOOTHING) -> float:
+    g = math.log2((current + k) / (baseline + k))
     g = max(-3.0, min(3.0, g))
     return (g + 3.0) / 6.0
 
 
+def _has_reddit(cur: float | None, base: float | None) -> bool:
+    return cur is not None and base is not None and (cur > 0 or base > 0)
+
+
 def trend_score(current_mentions: int, baseline_mentions: float,
                 current_authors: int, baseline_authors: float,
-                subreddit_count: int, subreddits_in_dataset: int = 4) -> float:
-    core = (W_MENTIONS * _growth_component(current_mentions, baseline_mentions)
-            + W_AUTHORS * _growth_component(current_authors, baseline_authors))
+                subreddit_count: int, subreddits_in_dataset: int = 4,
+                reddit_current: float | None = None, reddit_baseline: float | None = None) -> float:
+    has_text = current_mentions > 0 or baseline_mentions > 0
+    has_reddit = _has_reddit(reddit_current, reddit_baseline)
+    text_core = (W_MENTIONS * _growth_component(current_mentions, baseline_mentions)
+                 + W_AUTHORS * _growth_component(current_authors, baseline_authors))
+    if has_reddit:
+        r = _growth_component(reddit_current, reddit_baseline, REDDIT_SMOOTHING)
+        core = W_TEXT * text_core + W_REDDIT * r if has_text else r
+    else:
+        core = text_core
     target = max(1, min(4, subreddits_in_dataset))
     breadth = min(subreddit_count / target, 1.0)
     if core > 0.5:
         core = 0.5 + (core - 0.5) * (0.5 + 0.5 * breadth)
     weight = min(1.0, max(current_mentions, baseline_mentions) / FULL_VOLUME)
+    if has_reddit:
+        weight = max(weight, min(1.0, max(reddit_current, reddit_baseline) / REDDIT_FULL_VOLUME))
     score = 50.0 + (100.0 * core - 50.0) * weight
     return round(max(0.0, min(100.0, score)), 1)
 
 
-def classify(score: float, current_mentions: int, baseline_mentions: float) -> str:
+def classify(score: float, current_mentions: int, baseline_mentions: float,
+             reddit_current: float | None = None, reddit_baseline: float | None = None) -> str:
     grew_100 = baseline_mentions == 0 or current_mentions >= 2 * baseline_mentions
-    if score >= 75 and current_mentions >= MIN_EMERGING_MENTIONS and grew_100:
+    enough = current_mentions >= MIN_EMERGING_MENTIONS
+    if _has_reddit(reddit_current, reddit_baseline):
+        grew_100 = (grew_100 and current_mentions > 0) or reddit_baseline == 0 or \
+            reddit_current >= 2 * reddit_baseline
+        enough = enough or reddit_current >= REDDIT_MIN_EMERGING
+    if score >= 75 and enough and grew_100:
         return "EMERGING"
     if score >= 60:
         return "RISING"

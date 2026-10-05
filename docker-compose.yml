@@ -23,7 +23,10 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://reddit:reddit@db:5432/reddit_stock
       DATA_DIR: /app/data
+      # Live mode needs the collection job running (see .env.example); harmless in demo mode.
+      SCHEDULER_ENABLED: ${SCHEDULER_ENABLED:-true}
     ports: ["8000:8000"]
+    restart: unless-stopped
     depends_on:
       db: { condition: service_healthy }
 

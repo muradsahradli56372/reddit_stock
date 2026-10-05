@@ -4,7 +4,7 @@ import {
 } from "recharts";
 import { api } from "./api.js";
 import { Card, SENTIMENT, TrendBadge } from "./components.jsx";
-import { changeClass, fmtChange, fmtInt, fmtPct, fmtWeek } from "./format.js";
+import { changeClass, community, fmtChange, fmtInt, fmtPct, fmtWeek } from "./format.js";
 
 const shortWeek = (iso) =>
   new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
@@ -163,6 +163,8 @@ export default function StockPage({ ticker, week, onBack }) {
   if (!data || !hist) return <div className="loading">Loading {ticker}…</div>;
 
   const m = data.metrics;
+  const hasText = hist.some((w) => w.mentions > 0);
+  const hasRedditHist = hist.some((w) => w.reddit_mentions != null);
   const isDemoPrice = data.price?.source === "demo";
   return (
     <main className="grid">
@@ -179,14 +181,30 @@ export default function StockPage({ ticker, week, onBack }) {
 
       {!m && <div className="span-12 notice">No mentions of {data.ticker} in this week. History is shown below.</div>}
 
+      {m && m.mentions === 0 && (
+        <div className="span-12 notice">
+          {data.ticker} is discussed on Reddit but wasn't in this week's text sample, so there's no sentiment, reasons or
+          author data yet. Add it to STOCKTWITS_WATCHLIST to collect its messages.
+        </div>
+      )}
+
       {m && (
         <div className="span-12 tiles tiles-7">
-          <Kpi label="Mentions" value={fmtInt(m.mentions)} sub={`${fmtChange(m.mention_change_pct)} WoW`}
-               subClass={changeClass(m.mention_change_pct)} />
-          <Kpi label="Unique authors" value={fmtInt(m.unique_authors)} sub={`${fmtChange(m.author_change_pct)} WoW`}
-               subClass={changeClass(m.author_change_pct)} />
-          <Kpi label="Bullish" value={fmtPct(m.bullish_pct)} sub={`${m.bullish} mentions`} />
-          <Kpi label="Bearish" value={fmtPct(m.bearish_pct)} sub={`${m.bearish} mentions`} />
+          {m.reddit_mentions != null && (
+            <Kpi label="Reddit mentions (est.)" value={fmtInt(m.reddit_mentions)}
+                 sub={m.reddit_prev_mentions == null ? `${m.reddit_days_covered}/7 days covered` : `${fmtChange(m.reddit_change_pct)} WoW`}
+                 subClass={m.reddit_prev_mentions == null ? "" : changeClass(m.reddit_change_pct)} />
+          )}
+          {m.mentions > 0 && (
+            <>
+              <Kpi label="Text mentions" value={fmtInt(m.mentions)} sub={`${fmtChange(m.mention_change_pct)} WoW`}
+                   subClass={changeClass(m.mention_change_pct)} />
+              <Kpi label="Unique authors" value={fmtInt(m.unique_authors)} sub={`${fmtChange(m.author_change_pct)} WoW`}
+                   subClass={changeClass(m.author_change_pct)} />
+              <Kpi label="Bullish" value={fmtPct(m.bullish_pct)} sub={`${m.bullish} mentions`} />
+              <Kpi label="Bearish" value={fmtPct(m.bearish_pct)} sub={`${m.bearish} mentions`} />
+            </>
+          )}
           <Kpi label="Trend score" value={m.trend_score.toFixed(0)} sub={m.trend_class} />
           <Kpi label="Early signal" value={(m.early_signal_score ?? 0).toFixed(0)}
                sub={m.is_early_signal ? "flagged" : "not flagged"} />
@@ -197,22 +215,47 @@ export default function StockPage({ ticker, week, onBack }) {
         </div>
       )}
 
-      <Card className="span-7" title="Attention over time" subtitle="Weekly mentions vs. unique authors (dashed line = selected week)">
+      {hist.some((w) => w.reddit_mentions != null) && (
+        <Card className="span-12" title="Reddit attention over time"
+              subtitle="Estimated weekly Reddit mentions from daily count snapshots (count-only source, no text)">
+          <div className="two-col">
+            <ResponsiveContainer width="100%" height={200}>
+              <BarChart data={hist} margin={{ top: 8, right: 8, bottom: 0, left: -6 }}>
+                <CartesianGrid vertical={false} stroke="var(--grid)" />
+                <XAxis dataKey="week_start" tickFormatter={shortWeek} {...axisProps} />
+                <YAxis allowDecimals={false} {...axisProps} />
+                <ReferenceLine x={data.week_start} stroke="var(--text-muted)" strokeDasharray="3 3" />
+                <Tooltip content={<ChartTooltip rows={[{ key: "reddit_mentions", label: "Reddit mentions (est.)", color: "var(--series-1)", fmt: (v) => (v == null ? "no data" : fmtInt(v)) }]} />} cursor={{ fill: "var(--hover)" }} />
+                <Bar dataKey="reddit_mentions" fill="var(--series-1)" radius={[4, 4, 0, 0]} isAnimationActive={false} />
+              </BarChart>
+            </ResponsiveContainer>
+            <div>
+              <div className="mini-title">By subreddit, this week</div>
+              <ReasonList stance="bullish" items={Object.entries(m?.reddit_distribution || {}).map(([c, v]) => ({ category: c, label: `r/${c}`, count: Math.round(v) }))} />
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {hasText && <Card className="span-7" title="Text attention over time" subtitle="Weekly text mentions vs. unique authors (dashed line = selected week)">
         <AttentionChart weeks={hist} current={data.week_start} />
-      </Card>
-      <Card className="span-5" title="Sentiment over time" subtitle="Share of mentions by stance, per week">
+      </Card>}
+      {hasText && <Card className="span-5" title="Sentiment over time" subtitle="Share of mentions by stance, per week">
         <SentimentHistory weeks={hist} />
-      </Card>
+      </Card>}
 
       <Card className="span-12" title="Reddit attention vs. price"
             subtitle="Two separate scales on purpose: attention changes are often 10-100x larger than price changes">
         <div className="two-col">
-          <ChangeBars weeks={hist} dataKey="mention_change_pct" label="Mentions, week-over-week %" color="var(--series-1)" current={data.week_start} />
+          <ChangeBars weeks={hist} dataKey={hasRedditHist ? "reddit_change_pct" : "mention_change_pct"}
+                      label={hasRedditHist ? "Reddit mentions, week-over-week %" : "Mentions, week-over-week %"}
+                      color="var(--series-1)" current={data.week_start} />
           <ChangeBars weeks={hist} dataKey="price_change_pct" label={`Share price, weekly %${isDemoPrice ? " (DEMO prices, not real)" : ""}`} color="var(--series-2)" current={data.week_start} />
         </div>
         {data.price?.attention_vs_price && <p className="neutral-note">{data.price.attention_vs_price}</p>}
       </Card>
 
+      {hasText && <>
       <Card className="span-6" title="Why people are bullish / bearish"
             subtitle={`Reasons stated in mentions, counted by category${data.reasons.methods.includes("fallback_keywords") ? " · keyword fallback" : ""}`}>
         <div className="two-col">
@@ -224,11 +267,11 @@ export default function StockPage({ ticker, week, onBack }) {
       <Card className="span-6" title="Sentiment by subreddit" subtitle="Where the discussion happens and how each community leans">
         <div className="table-wrap">
           <table className="data-table">
-            <thead><tr><th>Subreddit</th><th className="num">Mentions</th><th className="num">Bullish</th><th className="num">Bearish</th><th>Net (bear ← → bull)</th></tr></thead>
+            <thead><tr><th>Community</th><th className="num">Mentions</th><th className="num">Bullish</th><th className="num">Bearish</th><th>Net (bear ← → bull)</th></tr></thead>
             <tbody>
               {data.subreddit_sentiment.map((s) => (
                 <tr key={s.subreddit}>
-                  <td>r/{s.subreddit}</td>
+                  <td>{community(s.subreddit)}</td>
                   <td className="num">{s.mentions}</td>
                   <td className="num">{fmtPct(s.bullish_pct)}</td>
                   <td className="num">{fmtPct(s.bearish_pct)}</td>
@@ -246,7 +289,7 @@ export default function StockPage({ ticker, week, onBack }) {
             <li key={i}>
               {p.permalink ? <a href={p.permalink} target="_blank" rel="noreferrer">{p.title}</a> : <span>{p.title}</span>}
               <div className="muted small">
-                r/{p.subreddit} · ▲ {fmtInt(p.score)} · {p.num_comments} comments · {p.mentions_in_thread} mention{p.mentions_in_thread === 1 ? "" : "s"}
+                {community(p.subreddit)} · ▲ {fmtInt(p.score)} · {p.num_comments} {p.subreddit === "stocktwits" ? "replies" : "comments"} · {p.mentions_in_thread} mention{p.mentions_in_thread === 1 ? "" : "s"}
                 {p.post_sentiment && <> · <span className={`sent-${p.post_sentiment}`}>{p.post_sentiment}</span></>}
                 {p.is_demo && " · demo"}
               </div>
@@ -261,13 +304,14 @@ export default function StockPage({ ticker, week, onBack }) {
             <li key={i}>
               <p>“{x.context}”</p>
               <div className="muted small">
-                r/{x.subreddit} · {x.source_type} · <span className={`sent-${x.sentiment}`}>{x.sentiment}</span>
-                {" "}({x.sentiment_method === "llm" ? "LLM" : "fallback"}) · detected via {x.detection_method} ({x.confidence})
+                {community(x.subreddit)} · {x.source_type} · <span className={`sent-${x.sentiment}`}>{x.sentiment}</span>
+                {" "}({x.sentiment_method === "llm" ? "LLM" : x.sentiment_method === "author_label" ? "author's own tag" : "fallback"}) · detected via {x.detection_method} ({x.confidence})
               </div>
             </li>
           ))}
         </ul>
       </Card>
+      </>}
     </main>
   );
 }

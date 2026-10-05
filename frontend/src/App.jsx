@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { api } from "./api.js";
-import { Card, EmergingCards, Overview, SentimentChart, SubredditChart, SubredditTable, SummaryBox, TopTable } from "./components.jsx";
+import { Card, EmergingCards, Overview, RedditCommunities, SentimentChart, SubredditChart, SubredditTable, SummaryBox, TopTable } from "./components.jsx";
 import StockPage from "./StockPage.jsx";
 
 // Minimal hash router: "#/" = dashboard, "#/stock/RKLB" = stock detail.
@@ -49,7 +49,7 @@ export default function App() {
         prev ? api.report(prev) : Promise.resolve(null), api.earlySignals(wk), api.subreddits(wk),
       ]);
       setData({ stocks: stocks.stocks, emerging: emerging.stocks, sentiment, report, prevReport,
-                early: early.stocks, subreddits: subs.subreddits });
+                early: early.stocks, subreddits: subs.subreddits, redditCommunities: subs.reddit_communities });
     } catch (e) {
       setError(e.message);
       setData(null);
@@ -106,8 +106,15 @@ export default function App() {
           </div>
         </div>
         <div className="controls">
-          {health?.demo_mode && <span className="pill pill-demo" title="Reddit credentials not configured: using generated demo data">DEMO MODE</span>}
-          {health && !health.demo_mode && <span className="pill pill-ok" title="Collecting from Reddit">LIVE REDDIT</span>}
+          {health?.demo_mode && <span className="pill pill-demo" title="No live text source configured: using generated demo data">DEMO MODE</span>}
+          {health && !health.demo_mode && (
+            <span className="pill pill-ok" title="Where post/message text comes from">
+              TEXT: {health.text_source === "stocktwits" ? "StockTwits" : "Reddit"}
+            </span>
+          )}
+          {health && health.attention_source !== "none" && !health.demo_mode && (
+            <span className="pill pill-ok" title="Count-only Reddit attention">REDDIT COUNTS: {health.attention_source === "apewisdom" ? "ApeWisdom" : health.attention_source}</span>
+          )}
           {health && (
             <span className={`pill ${health.llm_enabled ? "pill-ok" : ""}`} title="Anthropic API key status">
               {health.llm_enabled ? "LLM: Claude" : "LLM: off (fallbacks)"}
@@ -142,7 +149,7 @@ export default function App() {
           </div>
 
           <Card className="span-8" title="Top mentioned stocks"
-                subtitle={`Week of ${fmtWeek(data.report.week_start)} · ranked by mentions (one per post/comment per ticker)`}>
+                subtitle={`Week of ${fmtWeek(data.report.week_start)} · ranked by ${data.report.overview.reddit_attention ? "Reddit attention" : "mentions"} (text: one mention per post/comment per ticker)`}>
             <TopTable stocks={data.stocks} />
           </Card>
 
@@ -159,9 +166,10 @@ export default function App() {
             <EmergingCards stocks={data.early} mode="early" />
           </Card>
 
-          <Card className="span-5" title="Subreddit activity" subtitle="Stock mentions per subreddit (hover for posts/comments)">
+          <Card className="span-5" title="Communities" subtitle="Text mentions per community (hover for posts/comments)">
             <SubredditChart activity={data.report.overview.subreddit_activity} />
             <SubredditTable subs={data.subreddits} />
+            <RedditCommunities comms={data.redditCommunities} />
           </Card>
 
           <Card className="span-7" title="Weekly AI summary" subtitle="Data, interpretation and speculation kept separate">

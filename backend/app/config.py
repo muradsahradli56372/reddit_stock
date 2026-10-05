@@ -45,6 +45,33 @@ class Settings:
     reddit_replace_more_limit: int = field(default_factory=lambda: int(os.getenv("REDDIT_REPLACE_MORE_LIMIT", "8")))
     reddit_max_retries: int = field(default_factory=lambda: int(os.getenv("REDDIT_MAX_RETRIES", "5")))
 
+    # --- Data sources -----------------------------------------------------------------
+    # TEXT_SOURCE: where post/message TEXT comes from (full pipeline: extraction, sentiment, reasons)
+    #   auto (reddit if Reddit credentials are set, else demo) | demo | stocktwits | reddit
+    text_source: str = field(default_factory=lambda: os.getenv("TEXT_SOURCE", "auto").lower())
+    # ATTENTION_SOURCE: Reddit mention COUNTS without text
+    #   auto (demo when text source is demo, else apewisdom) | apewisdom | demo | none
+    attention_source: str = field(default_factory=lambda: os.getenv("ATTENTION_SOURCE", "auto").lower())
+
+    # ApeWisdom: which filters (mostly subreddit names) to snapshot; total = sum of these.
+    apewisdom_filters: list[str] = field(default_factory=lambda: _list(
+        "APEWISDOM_FILTERS", "wallstreetbets,stocks,investing,options,Daytrading"))
+    apewisdom_max_pages: int = field(default_factory=lambda: int(os.getenv("APEWISDOM_MAX_PAGES", "3")))
+    # Tickers below this estimated weekly Reddit mention count are not listed on their own.
+    reddit_min_weekly_mentions: int = field(default_factory=lambda: int(os.getenv("REDDIT_MIN_WEEKLY_MENTIONS", "20")))
+
+    # StockTwits (public, unauthenticated stream API)
+    stocktwits_universe_size: int = field(default_factory=lambda: int(os.getenv("STOCKTWITS_UNIVERSE_SIZE", "30")))
+    stocktwits_watchlist: list[str] = field(default_factory=lambda: _list(
+        "STOCKTWITS_WATCHLIST", "NVDA,TSLA,AAPL,PLTR,AMD,MSFT,AMZN,META,GME,SOFI,RKLB,ASTS,HOOD"))
+    stocktwits_max_pages: int = field(default_factory=lambda: int(os.getenv("STOCKTWITS_MAX_PAGES_PER_SYMBOL", "10")))
+    stocktwits_max_requests: int = field(default_factory=lambda: int(os.getenv("STOCKTWITS_MAX_REQUESTS_PER_RUN", "180")))
+    stocktwits_request_delay: float = field(default_factory=lambda: float(os.getenv("STOCKTWITS_REQUEST_DELAY", "1.0")))
+    http_user_agent: str = field(default_factory=lambda: os.getenv(
+        "HTTP_USER_AGENT", "Mozilla/5.0 (compatible; reddit-stock-intel/0.3; research use)"))
+    # Light collection job (ApeWisdom snapshot + StockTwits incremental) - must run at least daily.
+    collect_cron: str = field(default_factory=lambda: os.getenv("COLLECT_CRON", "0 */4 * * *"))
+
     # Weeks are Monday 00:00 -> Sunday 23:59:59 in this timezone.
     report_timezone: str = field(default_factory=lambda: os.getenv("REPORT_TIMEZONE", "UTC"))
     # Demo mode generates this many consecutive weeks so history charts have data.
@@ -77,8 +104,22 @@ class Settings:
         return bool(self.reddit_client_id and self.reddit_client_secret)
 
     @property
+    def resolved_text_source(self) -> str:
+        if self.force_demo:
+            return "demo"
+        if self.text_source == "auto":
+            return "reddit" if self.has_reddit_credentials else "demo"
+        return self.text_source
+
+    @property
+    def resolved_attention_source(self) -> str:
+        if self.attention_source == "auto":
+            return "demo" if self.resolved_text_source == "demo" else "apewisdom"
+        return self.attention_source
+
+    @property
     def demo_mode(self) -> bool:
-        return self.force_demo or not self.has_reddit_credentials
+        return self.resolved_text_source == "demo"
 
     @property
     def use_llm(self) -> bool:

@@ -27,6 +27,7 @@ class RawPost:
     num_comments: int
     created_utc: datetime
     permalink: str | None = None
+    author_sentiment: str | None = None  # "bullish"/"bearish" when the author tagged it (StockTwits)
 
 
 @dataclass
@@ -46,6 +47,7 @@ class CollectedWeek:
     comments: list[RawComment] = field(default_factory=list)
     is_demo: bool = False
     stats: dict = field(default_factory=dict)
+    platform: str = "reddit"  # reddit | stocktwits
 
 
 class Collector(Protocol):
@@ -56,6 +58,11 @@ class Collector(Protocol):
 
 def _tz() -> ZoneInfo:
     return ZoneInfo(settings.report_timezone)
+
+
+def today_local() -> date:
+    """Today's date in REPORT_TIMEZONE."""
+    return datetime.now(_tz()).date()
 
 
 def week_start_of(d: date | datetime) -> date:

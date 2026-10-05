@@ -28,9 +28,12 @@ class Author(Base):
 
 
 class Subreddit(Base):
+    """A community where text was collected: a subreddit, or a whole platform such as 'stocktwits'.
+    (Table name kept for backward compatibility.)"""
     __tablename__ = "subreddits"
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    platform: Mapped[str | None] = mapped_column(String(16))  # reddit | stocktwits (NULL = reddit, pre-v0.3)
 
 
 class Post(Base):
@@ -48,6 +51,8 @@ class Post(Base):
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     is_demo: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     permalink: Mapped[str | None] = mapped_column(String(512))  # Phase 2
+    # Stance the AUTHOR declared (StockTwits "Bullish"/"Bearish" tag); NULL when none.
+    author_sentiment: Mapped[str | None] = mapped_column(String(8))
 
 
 class Comment(Base):
@@ -146,6 +151,14 @@ class WeeklyStockMetric(Base):
     price_change_pct: Mapped[float | None] = mapped_column(Float)
     attention_vs_price: Mapped[str | None] = mapped_column(Text)
 
+    # v0.3: Reddit attention from count-only sources (ApeWisdom). NULL = no coverage that week.
+    reddit_mentions: Mapped[float | None] = mapped_column(Float)  # estimated weekly mentions
+    reddit_upvotes: Mapped[float | None] = mapped_column(Float)
+    reddit_prev_mentions: Mapped[float | None] = mapped_column(Float)
+    reddit_change_pct: Mapped[float | None] = mapped_column(Float)
+    reddit_distribution: Mapped[dict | None] = mapped_column(JSON)  # {subreddit: est. mentions}
+    reddit_days_covered: Mapped[int | None] = mapped_column(Integer)
+
     __table_args__ = (
         UniqueConstraint("week_start", "ticker", name="uq_wsm_week_ticker"),
         Index("ix_wsm_week_change", "week_start", "mention_change_pct"),
@@ -184,6 +197,32 @@ class WeeklyPrice(Base):
     fetched_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
     __table_args__ = (UniqueConstraint("ticker", "week_start", name="uq_price_ticker_week"),)
+
+
+class AttentionSnapshot(Base):
+    """One day's mention count for a ticker in a community, from a count-only source (ApeWisdom).
+
+    ApeWisdom reports rolling 24h counts and keeps no history, so we store one snapshot per
+    (source, community, ticker, day); a later snapshot on the same day replaces the earlier one.
+    Weekly mentions are estimated as mean(daily counts) * 7 over the days we have.
+    """
+    __tablename__ = "attention_snapshots"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source: Mapped[str] = mapped_column(String(16), nullable=False)  # apewisdom | demo
+    community: Mapped[str] = mapped_column(String(64), nullable=False)
+    ticker: Mapped[str] = mapped_column(String(10), nullable=False)
+    snapshot_date: Mapped[date] = mapped_column(Date, nullable=False)
+    mentions: Mapped[int] = mapped_column(Integer, nullable=False)
+    upvotes: Mapped[int] = mapped_column(Integer, nullable=False)
+    rank: Mapped[int | None] = mapped_column(Integer)
+    name: Mapped[str | None] = mapped_column(String(128))
+    captured_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("source", "community", "ticker", "snapshot_date", name="uq_snapshot"),
+        Index("ix_snapshot_date", "snapshot_date"),
+        Index("ix_snapshot_ticker_date", "ticker", "snapshot_date"),
+    )
 
 
 class LLMCache(Base):

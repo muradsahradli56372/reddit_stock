@@ -4,9 +4,20 @@ A **research tool, not trading advice**. It analyses Reddit discussion of public
 produces a weekly report: which stocks are discussed most, how many *unique people* discuss them,
 sentiment, what is gaining unusual attention versus the previous week, and which subreddits drive it.
 
-**Status: Phase 2.** Live Reddit collector (PRAW), reason extraction, Early Signal Score,
-per-subreddit sentiment, stock detail page with history, price-vs-attention comparison (yfinance),
-scheduler, structured logging, and caching. With no credentials everything runs on realistic demo data.
+**Status: v0.3.** Since Reddit's Data API now requires Reddit's approval, the live setup combines two
+key-free sources:
+
+| Source | What it gives | Used for |
+|---|---|---|
+| **ApeWisdom** (apewisdom.io) | Ticker mention + upvote **counts** on Reddit, per subreddit (no text) | Reddit attention volume, ranking, growth, subreddit split |
+| **StockTwits** (public streams) | Message **text**, author, likes, the author's own Bullish/Bearish tag | Sentiment, reasons, unique authors, the full extraction pipeline |
+
+ApeWisdom decides **which** tickers to read on StockTwits (Reddit's most-discussed and fastest-rising
+ones, plus StockTwits trending, plus your watchlist). The trend score combines growth on both, and the
+dashboard labels which source every number comes from. The official Reddit API collector (PRAW) is
+still included for anyone who gets approval. Also included: reasons, Early Signal Score, stock detail
+page, price-vs-attention (yfinance), scheduler, structured logs and caching. With nothing configured,
+everything runs on realistic demo data.
 
 ---
 
@@ -54,15 +65,24 @@ TEST_DATABASE_URL=postgresql+psycopg://reddit:reddit@localhost:5432/reddit_stock
 
 Tests never touch the network: the Anthropic API, Reddit (PRAW) and yfinance are all tested with fakes.
 
-### Going live
+### Going live (ApeWisdom + StockTwits, no keys needed)
 
-1. Create a Reddit "script" app at https://www.reddit.com/prefs/apps, then set `REDDIT_CLIENT_ID`,
-   `REDDIT_CLIENT_SECRET` and `REDDIT_USER_AGENT` in `.env`. Live mode switches on automatically
-   (`DEMO_MODE=true` forces demo).
-2. Optionally set `ANTHROPIC_API_KEY` for LLM sentiment, reasons, disambiguation and the summary.
-3. Optionally set `SCHEDULER_ENABLED=true` (default: Mondays 06:00 in `REPORT_TIMEZONE`).
-4. Click **Run Analysis** or `POST /analysis/run`. Live runs process the last complete week and the
-   week before it.
+1. Check that both services answer from your machine and that our parsers understand them:
+   ```bash
+   python scripts/check_sources.py
+   ```
+2. In `.env`: `TEXT_SOURCE=stocktwits`, `ATTENTION_SOURCE=apewisdom`, `SCHEDULER_ENABLED=true`
+   (docker compose enables the scheduler by default).
+3. **Keep the backend running.** The collection job (`COLLECT_CRON`, default every 4 hours) takes the
+   daily ApeWisdom snapshot and pulls new StockTwits messages. ApeWisdom keeps **no history**, so Reddit
+   counts only exist from the day you start collecting. The first week will show
+   `days_covered < 7`, and week-over-week Reddit growth appears from the second week.
+4. The weekly analysis runs Mondays 06:00 (`SCHEDULE_CRON`, in `REPORT_TIMEZONE`). Or use the
+   **Run Analysis** button, or `POST /collect/run` to collect immediately.
+5. Optional: `ANTHROPIC_API_KEY` for LLM sentiment/reasons/disambiguation and the summary.
+
+If you do get Reddit Data API approval: set `REDDIT_CLIENT_ID`/`REDDIT_CLIENT_SECRET` and
+`TEXT_SOURCE=reddit` to collect Reddit text directly (`collectors/reddit.py`).
 
 Prices come from yfinance in live mode (`MARKET_DATA_PROVIDER=auto`). In demo mode they are
 synthetic, and every chart and label using them says **DEMO**.
@@ -209,7 +229,56 @@ delays, macro, legal/regulatory, technical breakdown). A fixed list means reason
 ("12 bullish mentions cite contracts"). A reason must match the mention's stance, and the LLM's
 answers are validated against the list. Extend the dictionaries to add categories.
 
-### Live Reddit collection and its limits
+### ApeWisdom: Reddit counts (count-only)
+
+`attention.py`. The collection job fetches `apewisdom.io/api/v1.0/filter/{filter}/page/{n}` for each
+of `APEWISDOM_FILTERS` (up to `APEWISDOM_MAX_PAGES` pages) and stores one snapshot per
+(community, ticker, day) in `attention_snapshots`; a later snapshot on the same day replaces it.
+Tickers not in `companies.csv` are added automatically, using ApeWisdom's name.
+
+```
+weekly mentions (per subreddit) = mean(daily 24h counts on covered days) * 7
+total = sum over APEWISDOM_FILTERS        (don't combine "all-stocks" with individual subreddits)
+```
+
+Every number carries `days_covered`. Reddit week-over-week growth only exists when the previous week
+was covered too; otherwise it shows "–", never a made-up %. Limits: no text (so no sentiment, reasons
+or unique authors for Reddit), no history before you start collecting, and ApeWisdom's own ticker
+detection is a black box to us.
+
+### StockTwits: text
+
+`collectors/stocktwits.py`. Reads `api.stocktwits.com/api/2/streams/symbol/{SYMBOL}.json` for each
+symbol in the universe, paging back with `?max=` until it passes the start of the week, reaches a
+message it already has (incremental), or hits a cap. A message appearing in several streams is stored
+once. Authors are stored as `st:<username>`, so they never collide with Reddit usernames. If a message
+mentions exactly **one** ticker and its author tagged it Bullish/Bearish, that tag is used as the
+sentiment (method `author_label`). Messages with several tickers go to our classifier, because the tag
+may refer to only one of them. Limits:
+
+* Unauthenticated rate limit (historically ~200 requests/hour). Caps: `STOCKTWITS_MAX_REQUESTS_PER_RUN`,
+  `STOCKTWITS_MAX_PAGES_PER_SYMBOL` (30 messages/page), `STOCKTWITS_REQUEST_DELAY`. Very busy symbols
+  (NVDA, TSLA) are **sampled**, so their text counts understate volume. That's why ranking and volume
+  use the ApeWisdom counts.
+* Only symbols in the universe are read. A ticker that's only on Reddit shows counts but no sentiment
+  until you add it to `STOCKTWITS_WATCHLIST`.
+* StockTwits' bot protection may block some networks (HTTP 403). `check_sources.py` tells you.
+* StockTwits users are a different crowd from Reddit. The dashboard keeps them apart: "Reddit · counts"
+  vs. "Text sample".
+
+### How the two are combined
+
+* **Ranking** uses Reddit counts when the week has them, otherwise text mentions.
+* **Trend score:** `core = 0.6 * text_core + 0.4 * reddit_growth` (Reddit growth with +20 smoothing,
+  since counts are larger). Without Reddit data it's exactly the single-source formula. Breadth counts
+  distinct communities (StockTwits + each subreddit).
+* **Early signal:** growth = the larger of text and Reddit growth. "Small" is measured on Reddit volume
+  **relative to the week's most-discussed ticker** (full credit up to 25% of the leader, zero at 75%),
+  so it works at any data scale.
+* **Price comparison** uses Reddit growth when available, otherwise text growth, and names its source
+  in the sentence.
+
+### Official Reddit API collection and its limits (approval required)
 
 `collectors/reddit.py` pages through `/new` (and `/top?t=month`, to catch popular posts) for each
 subreddit until it passes the start of the week. It expands comment trees
@@ -261,7 +330,8 @@ additive changes only. Renames or drops would need Alembic.
 | GET | `/stocks/{ticker}?week=` | metrics, reasons, per-subreddit sentiment, top threads, price, recent mentions |
 | GET | `/stocks/{ticker}/history?weeks=12` | weekly series: mentions, authors, sentiment, scores, price |
 | GET | `/early-signals?week=&include_all=` | flagged early signals (or all scored stocks) |
-| GET | `/subreddits?week=` | per-subreddit activity, sentiment, authors, top tickers |
+| GET | `/subreddits?week=` | per-community text activity/sentiment + `reddit_communities` (ApeWisdom counts) |
+| POST | `/collect/run` | run the collection job now (ApeWisdom snapshot + new StockTwits messages) |
 | GET | `/trending?week=&min_growth=&min_mentions=` | by trend score; `min_growth=100` → grew > 100% |
 | GET | `/emerging?week=&include_rising=` | EMERGING (+ RISING) stocks |
 | GET | `/sentiment?week=` | overall and per-stock sentiment |
@@ -302,9 +372,10 @@ concentrated (one account ≈ 50% of its mentions).
 
 ## Known limitations (honest list)
 
-* **The live Reddit and yfinance paths have never run against the real services** in the build
-  environment (its network policy blocks reddit.com and Yahoo Finance). They are covered by tests
-  with fake PRAW/yfinance objects. Please report the first real run's logs.
+* **ApeWisdom, StockTwits, Reddit and yfinance have never been called for real** in the build
+  environment (its network policy blocks all four). They are tested with fake HTTP/PRAW/yfinance
+  responses built from the documented formats, including an end-to-end live-mode test. Run
+  `python scripts/check_sources.py` first; if a format has changed, it shows exactly where.
 * Reddit coverage limits: see "Live Reddit collection and its limits" above.
 * Keyword reason extraction only finds reasons phrased with known keywords. The LLM path is much better.
 * The keyword sentiment fallback is crude: no sarcasm, limited negation, clause-level only. It is
@@ -321,6 +392,7 @@ concentrated (one account ≈ 50% of its mentions).
 
 ## Roadmap
 
+* **v0.3 (done):** ApeWisdom (Reddit counts) + StockTwits (text) as key-free live sources.
 * **Phase 2 (done):** live PRAW collector, reasons, Early Signal Score, per-subreddit sentiment,
   stock detail page, `MarketDataProvider` + yfinance, scheduler, structured logging, caching, history/subreddit endpoints.
 * **Phase 3:** auth, alerts, more sources, backtesting, deployment.

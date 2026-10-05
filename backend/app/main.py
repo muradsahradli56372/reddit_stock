@@ -26,6 +26,14 @@ def scheduled_run():
         log.exception("scheduled analysis failed")
 
 
+def scheduled_collect():
+    from .pipeline import collect_now
+    try:
+        collect_now()
+    except Exception:
+        log.exception("scheduled collection failed")
+
+
 def _start_scheduler():
     """Weekly run (default Monday 06:00 in REPORT_TIMEZONE) when SCHEDULER_ENABLED=true."""
     if not settings.scheduler_enabled:
@@ -37,9 +45,14 @@ def _start_scheduler():
     trigger = CronTrigger.from_crontab(settings.schedule_cron, timezone=settings.report_timezone)
     sched.add_job(scheduled_run, trigger, id="weekly_analysis", max_instances=1, coalesce=True,
                   misfire_grace_time=3600)
+    # Count-only sources (ApeWisdom) keep no history and StockTwits is read incrementally,
+    # so a light collection job must run at least daily.
+    sched.add_job(scheduled_collect, CronTrigger.from_crontab(settings.collect_cron, timezone=settings.report_timezone),
+                  id="collect", max_instances=1, coalesce=True, misfire_grace_time=3600)
     sched.start()
     log.info("scheduler started", extra={"cron": settings.schedule_cron, "tz": settings.report_timezone,
-                                         "next_run": str(sched.get_job("weekly_analysis").next_run_time)})
+                                         "next_run": str(sched.get_job("weekly_analysis").next_run_time),
+                                         "collect_cron": settings.collect_cron})
     return sched
 
 
@@ -63,7 +76,7 @@ async def lifespan(_app: FastAPI):
         sched.shutdown(wait=False)
 
 
-app = FastAPI(title="Reddit Stock Intelligence", version="0.2.0", lifespan=lifespan,
+app = FastAPI(title="Reddit Stock Intelligence", version="0.3.0", lifespan=lifespan,
               description="Research tool analysing Reddit discussion of public companies. Not trading advice.")
 app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_methods=["*"], allow_headers=["*"])
 app.include_router(router)

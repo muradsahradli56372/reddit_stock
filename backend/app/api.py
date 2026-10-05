@@ -26,6 +26,8 @@ METRIC_FIELDS = (
     "prev_unique_authors", "prev_comment_mentions", "mention_change_pct", "author_change_pct",
     "comment_change_pct", "trend_score", "trend_class", "avg_engagement", "early_signal_score",
     "is_early_signal", "price_change_pct", "attention_vs_price",
+    "reddit_mentions", "reddit_upvotes", "reddit_prev_mentions", "reddit_change_pct", "reddit_distribution",
+    "reddit_days_covered",
 )
 
 
@@ -64,8 +66,10 @@ def health():
     from .market_data import get_provider
     provider = get_provider()
     return {"status": "ok", "demo_mode": settings.demo_mode, "llm_enabled": settings.use_llm,
+            "text_source": settings.resolved_text_source, "attention_source": settings.resolved_attention_source,
             "market_data": provider.name if provider else None, "timezone": settings.report_timezone,
-            "scheduler": {"enabled": settings.scheduler_enabled, "cron": settings.schedule_cron},
+            "scheduler": {"enabled": settings.scheduler_enabled, "cron": settings.schedule_cron,
+                          "collect_cron": settings.collect_cron},
             "cache": dict(api_cache.stats)}
 
 
@@ -78,12 +82,13 @@ def weeks(session: Session = Depends(get_session)):
 
 @router.get("/stocks")
 def stocks(request: Request, week: date | None = None, limit: int = Query(50, ge=1, le=500),
-           sort: str = Query("mentions", pattern="^(mentions|trend_score|unique_authors|mention_change_pct|"
-                                                  "early_signal_score)$"),
+           sort: str = Query("rank", pattern="^(rank|mentions|trend_score|unique_authors|mention_change_pct|"
+                                              "early_signal_score|reddit_mentions|reddit_change_pct)$"),
            session: Session = Depends(get_session)):
     wk = resolve_week(session, week)
     col = getattr(WeeklyStockMetric, sort)
-    q = _metrics_query(wk).order_by(col.desc().nulls_last(), WeeklyStockMetric.ticker).limit(limit)
+    order = col.asc() if sort == "rank" else col.desc().nulls_last()
+    q = _metrics_query(wk).order_by(order, WeeklyStockMetric.ticker).limit(limit)
     return cached(request, lambda: {"week_start": wk.isoformat(),
                                     "stocks": [_metric_dict(m, c) for m, c in session.execute(q).all()]})
 
@@ -215,6 +220,8 @@ def stock_history(request: Request, ticker: str, weeks: int = Query(12, ge=1, le
                 "mention_change_pct": m.mention_change_pct if m else None,
                 "trend_score": m.trend_score if m else None, "trend_class": m.trend_class if m else None,
                 "early_signal_score": m.early_signal_score if m else None,
+                "reddit_mentions": m.reddit_mentions if m else None,
+                "reddit_change_pct": m.reddit_change_pct if m else None,
                 "price_change_pct": p.change_pct if p else None, "price_close": p.close_price if p else None,
                 "price_source": p.source if p else None,
             })
@@ -292,8 +299,34 @@ def subreddits(request: Request, week: date | None = None, session: Session = De
                                 sorted(tick[sub].items(), key=lambda x: (-x[1], x[0]))[:5]],
             })
         out.sort(key=lambda r: -r["mentions"])
-        return {"week_start": wk.isoformat(), "subreddits": out}
+        return {"week_start": wk.isoformat(), "subreddits": out,
+                "reddit_communities": reddit_communities(session, wk)}
     return cached(request, build)
+
+
+def reddit_communities(session: Session, week: date) -> list[dict]:
+    """Count-only Reddit attention per community (ApeWisdom filter) with its top tickers."""
+    reddit, days = pipeline.load_reddit_week(session, week)
+    if reddit is None:
+        return []
+    per: dict[str, dict[str, float]] = defaultdict(dict)
+    for tk, w in reddit.items():
+        for c, v in w.distribution.items():
+            per[c][tk] = v
+    out = [{"community": c, "mentions": round(sum(t.values())), "days_covered": days,
+            "top_tickers": [{"ticker": tk, "mentions": round(v)} for tk, v in
+                            sorted(t.items(), key=lambda x: (-x[1], x[0]))[:5]]}
+           for c, t in per.items()]
+    return sorted(out, key=lambda r: -r["mentions"])
+
+
+@router.post("/collect/run")
+def collect_run():
+    """Run the light collection job now (Reddit attention snapshot + new StockTwits messages)."""
+    try:
+        return pipeline.collect_now()
+    finally:
+        api_cache.clear()
 
 
 @router.get("/sentiment")

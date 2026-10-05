@@ -31,6 +31,12 @@ def _top_reasons(reasons: dict, ticker: str, stance: str, n: int = 2) -> str:
     return ", ".join(f"{REASON_LABELS.get(c, c).lower()} ({k})" for c, k in items)
 
 
+def _communities(m: dict) -> int:
+    """Text communities + Reddit subreddits (count-only) where the ticker was discussed."""
+    return len(set(m.get("subreddit_distribution") or {})
+               | {c for c, v in (m.get("reddit_distribution") or {}).items() if v})
+
+
 def template_summary(overview: dict, metrics: list[dict], reasons: dict | None = None) -> dict:
     data, interp, spec = [], [], []
     st = overview.get("sentiment", {})
@@ -51,10 +57,19 @@ def template_summary(overview: dict, metrics: list[dict], reasons: dict | None =
         [m for m in metrics if m["trend_class"] in ("EMERGING", "RISING")],
         key=lambda m: -m["trend_score"])
     for m in movers[:3]:
-        data.append(f"{m['ticker']}: {m['prev_mentions']} -> {m['mentions']} mentions "
+        reddit = ""
+        if m.get("reddit_mentions") is not None:
+            prev = "" if m.get("reddit_prev_mentions") is None else f"{m['reddit_prev_mentions']:.0f} -> "
+            chg = "" if m.get("reddit_prev_mentions") is None else f" ({_fmt_change(m['reddit_change_pct'])})"
+            reddit = f"Reddit mentions (est.) {prev}{m['reddit_mentions']:.0f}{chg}"
+        if m["mentions"]:
+            text = (f"{m['prev_mentions']} -> {m['mentions']} text mentions "
                     f"({_fmt_change(m['mention_change_pct'])}), unique authors {m['prev_unique_authors']} -> "
-                    f"{m['unique_authors']}, across {m['subreddit_count']} subreddits; trend score "
-                    f"{m['trend_score']:.0f} ({m['trend_class']}).")
+                    f"{m['unique_authors']}, across {_communities(m)} communities")
+        else:
+            text = "not in the text sample"
+        data.append(f"{m['ticker']}: " + "; ".join(x for x in (reddit, text) if x)
+                    + f"; trend score {m['trend_score']:.0f} ({m['trend_class']}).")
     for m in movers[:3]:
         if m.get("attention_vs_price"):  # the "co-occurrence, not causation" caveat lives in the disclaimer
             data.append(f"{m['ticker']}: {m['attention_vs_price'].split('. This is')[0]}.")
@@ -64,12 +79,21 @@ def template_summary(overview: dict, metrics: list[dict], reasons: dict | None =
             f"{m['ticker']} ({m['early_signal_score']:.0f})" for m in early[:4]) + ".")
     cooling = [m for m in metrics if m["trend_class"] == "COOLING"]
     for m in cooling[:2]:
-        data.append(f"{m['ticker']} attention fell {m['prev_mentions']} -> {m['mentions']} mentions "
-                    f"({_fmt_change(m['mention_change_pct'])}).")
+        if m.get("reddit_prev_mentions") is not None:
+            data.append(f"{m['ticker']} Reddit attention fell {m['reddit_prev_mentions']:.0f} -> "
+                        f"{m['reddit_mentions']:.0f} est. mentions ({_fmt_change(m['reddit_change_pct'])}).")
+        else:
+            data.append(f"{m['ticker']} attention fell {m['prev_mentions']} -> {m['mentions']} mentions "
+                        f"({_fmt_change(m['mention_change_pct'])}).")
 
     # Interpretation: explicitly derived from the numbers above.
     for m in movers[:3]:
-        breadth = "broad-based" if m["subreddit_count"] >= 3 else "concentrated in few subreddits"
+        if not m["mentions"]:
+            interp.append(f"{m['ticker']}'s rise is visible only in Reddit mention counts (across "
+                          f"{_communities(m)} subreddits); it is not in the text sample, so its sentiment and the "
+                          "reasons behind it are unknown.")
+            continue
+        breadth = "broad-based" if _communities(m) >= 3 else "concentrated in few communities"
         authors_grew = (m["author_change_pct"] is None) or (m["author_change_pct"] or 0) > 50
         interp.append(
             f"{m['ticker']}'s attention increase is {breadth}"
@@ -110,7 +134,10 @@ SYSTEM = (
     "Return ONLY JSON: {\"data\": [..], \"interpretation\": [..], \"speculation\": [..]} where each "
     "value is a list of 2-6 short sentences. 'data' restates measured numbers exactly. "
     "'interpretation' explains what the numbers suggest (e.g. breadth, concentration, sentiment). "
-    "'speculation' contains clearly hedged hypotheses (use 'may', 'could', 'if')."
+    "'speculation' contains clearly hedged hypotheses (use 'may', 'could', 'if'). Two kinds of data: "
+    "'reddit_*' fields are estimated Reddit mention COUNTS (no text); 'mentions', 'unique_authors' and "
+    "sentiment come from a TEXT sample (overview.text_platforms says which platform). A stock with "
+    "mentions = 0 has Reddit counts only: never state its sentiment or reasons."
 )
 
 
@@ -120,7 +147,8 @@ def generate(overview: dict, metrics: list[dict], reasons: dict | None = None) -
         keep = ("ticker", "mentions", "unique_authors", "prev_mentions", "mention_change_pct",
                 "author_change_pct", "bullish_pct", "bearish_pct", "subreddit_count",
                 "top_author_share", "trend_score", "trend_class", "early_signal_score", "is_early_signal",
-                "price_change_pct", "attention_vs_price")
+                "price_change_pct", "attention_vs_price", "reddit_mentions", "reddit_prev_mentions",
+                "reddit_change_pct")
         ov = {k: v for k, v in overview.items() if k != "collection"}
         stocks = []
         for m in metrics[:15]:

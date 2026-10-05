@@ -21,14 +21,15 @@ from datetime import date, datetime, timedelta
 from sqlalchemy import delete, distinct, func, select
 from sqlalchemy.orm import Session
 
-from . import api_cache, disambiguation, market_data, metrics, sentiment, summary
-from .collectors.base import CollectedWeek, Collector, last_complete_week, week_start_of
+from . import api_cache, attention, disambiguation, market_data, metrics, sentiment, summary
+from .collectors.base import CollectedWeek, Collector, last_complete_week, today_local, week_start_of
 from .collectors.demo import DemoCollector
 from .config import settings
 from .db import session_scope, upsert
 from .extraction import Candidate, get_extractor
 from .llm_cache import Cache
-from .models import (Author, Comment, Company, MentionReason, Post, StockMention, Subreddit, WeeklyPrice,
+from .models import (AttentionSnapshot, Author, Comment, Company, MentionReason, Post, StockMention, Subreddit,
+                     WeeklyPrice,
                      WeeklyReport, WeeklyStockMetric)
 from .reference import get_reference
 
@@ -43,10 +44,85 @@ def content_hash(text: str) -> str:
 
 
 def get_collector() -> Collector:
-    if settings.demo_mode:
-        return DemoCollector()
-    from .collectors.reddit import RedditCollector
-    return RedditCollector()
+    """Text source per TEXT_SOURCE: demo | stocktwits | reddit (approval-gated Reddit Data API)."""
+    src = settings.resolved_text_source
+    if src == "stocktwits":
+        from .collectors.stocktwits import StockTwitsCollector
+        return StockTwitsCollector()
+    if src == "reddit":
+        from .collectors.reddit import RedditCollector
+        return RedditCollector()
+    return DemoCollector()
+
+
+# ---------------------------------------------------------------- Reddit attention (count-only)
+def store_snapshots(session: Session, provider_name: str, day: date, rows: list[attention.SnapshotRow]) -> int:
+    """Upsert one day's counts; unknown tickers are added to `companies` (name from the source)."""
+    if not rows:
+        return 0
+    known = set(session.scalars(select(Company.ticker)))
+    new = {r.ticker: r.name for r in rows if r.ticker not in known}
+    upsert(session, Company, [{"ticker": tk, "name": (name or tk)[:128], "exchange": "", "aliases": []}
+                              for tk, name in new.items()], ["ticker"])
+    now = datetime.utcnow()
+    upsert(session, AttentionSnapshot, [{
+        "source": provider_name, "community": r.community, "ticker": r.ticker, "snapshot_date": day,
+        "mentions": r.mentions, "upvotes": r.upvotes, "rank": r.rank, "name": r.name, "captured_at": now,
+    } for r in rows], ["source", "community", "ticker", "snapshot_date"],
+        ["mentions", "upvotes", "rank", "name", "captured_at"])
+    return len(rows)
+
+
+def collect_attention(days: list[date]) -> dict:
+    """Snapshot count-only attention. Live providers (ApeWisdom) can only snapshot today;
+    the demo provider can backfill any day."""
+    provider = attention.get_attention_provider()
+    if provider is None:
+        return {"provider": None, "rows": 0}
+    if getattr(provider, "live_only", False):
+        days = [today_local()]
+    total = 0
+    for d in days:
+        try:
+            rows = provider.snapshot(d)  # network I/O outside the transaction
+        except Exception as exc:  # never break the run because the count source is down
+            log.warning("attention snapshot failed", extra={"provider": provider.name, "error": repr(exc)})
+            continue
+        with session_scope() as session:
+            total += store_snapshots(session, provider.name, d, rows)
+    return {"provider": provider.name, "days": len(days),
+            "from": days[0].isoformat() if days else None, "to": days[-1].isoformat() if days else None,
+            "rows": total}
+
+
+def load_reddit_week(session: Session, week: date) -> tuple[dict | None, int]:
+    """({ticker: RedditWeek}, days_covered) or (None, 0) when the week has no snapshots."""
+    rows = session.execute(
+        select(AttentionSnapshot.community, AttentionSnapshot.ticker, AttentionSnapshot.snapshot_date,
+               AttentionSnapshot.mentions, AttentionSnapshot.upvotes)
+        .where(AttentionSnapshot.snapshot_date >= week,
+               AttentionSnapshot.snapshot_date < week + timedelta(days=7))).all()
+    if not rows:
+        return None, 0
+    return attention.aggregate_week([tuple(r) for r in rows])
+
+
+def reddit_baselines(session: Session, week: date) -> tuple[dict | None, dict | None]:
+    """(prev-week {ticker: mentions} or None, avg over up to 4 earlier COVERED weeks or None)."""
+    prev, _ = load_reddit_week(session, week - timedelta(days=7))
+    covered = []
+    for i in range(1, 13):  # look back up to 12 weeks for 4 covered ones
+        w, _ = load_reddit_week(session, week - timedelta(days=7 * i))
+        if w is not None:
+            covered.append(w)
+        if len(covered) == BASELINE_WEEKS:
+            break
+    prev_map = {tk: rw.mentions for tk, rw in prev.items()} if prev is not None else None
+    if not covered:
+        return prev_map, None
+    tickers = set().union(*[c.keys() for c in covered])
+    avg = {tk: sum(c[tk].mentions for c in covered if tk in c) / len(covered) for tk in tickers}
+    return prev_map, avg
 
 
 def seed_companies(session: Session) -> None:
@@ -61,7 +137,8 @@ def seed_companies(session: Session) -> None:
 def store_raw(session: Session, data: CollectedWeek) -> None:
     names = {p.author for p in data.posts} | {c.author for c in data.comments}
     upsert(session, Author, [{"username": n, "is_deleted": False} for n in names if n], ["username"])
-    upsert(session, Subreddit, [{"name": s} for s in {p.subreddit for p in data.posts}], ["name"])
+    upsert(session, Subreddit, [{"name": s, "platform": data.platform} for s in {p.subreddit for p in data.posts}],
+           ["name"], ["platform"])
     author_ids = dict(session.execute(select(Author.username, Author.id)).all())
     sub_ids = dict(session.execute(select(Subreddit.name, Subreddit.id)).all())
     _drop_mentions_of_edited(session, data)
@@ -71,7 +148,9 @@ def store_raw(session: Session, data: CollectedWeek) -> None:
         "title": p.title, "body": p.body, "score": p.score, "num_comments": p.num_comments,
         "created_utc": p.created_utc, "week_start": week_start_of(p.created_utc),
         "content_hash": content_hash(p.title + "\n" + p.body), "is_demo": data.is_demo, "permalink": p.permalink,
-    } for p in data.posts], ["reddit_id"], ["title", "body", "score", "num_comments", "permalink", "content_hash"])
+        "author_sentiment": p.author_sentiment,
+    } for p in data.posts], ["reddit_id"], ["title", "body", "score", "num_comments", "permalink", "content_hash",
+                                            "author_sentiment"])
 
     post_ids = dict(session.execute(
         select(Post.reddit_id, Post.id).where(Post.reddit_id.in_({c.post_reddit_id for c in data.comments}))
@@ -188,6 +267,7 @@ def classify_pending_sentiment(session: Session, week: date) -> int:
     if not pending:
         return 0
     results = sentiment.classify([(m.ticker, m.context, m.matched_text) for m in pending], Cache(session))
+    results = apply_author_labels(session, pending, results)
     session.execute(delete(MentionReason).where(MentionReason.mention_id.in_([m.id for m in pending])))
     reason_rows = []
     for m, r in zip(pending, results):
@@ -200,6 +280,32 @@ def classify_pending_sentiment(session: Session, week: date) -> int:
     upsert(session, MentionReason, reason_rows, ["mention_id", "category"])
     session.flush()
     return len(pending)
+
+
+def apply_author_labels(session: Session, mentions: list, results: list) -> list:
+    """StockTwits authors can tag a message Bullish/Bearish. When a message mentions exactly ONE
+    ticker, that self-declared stance wins over our classifier (method="author_label"); reasons
+    are kept only if they match the declared stance. Multi-ticker messages are left to the
+    classifier, because the tag may refer to only one of the tickers."""
+    post_ids = {m.post_id for m in mentions if m.post_id}
+    if not post_ids:
+        return results
+    labels = dict(session.execute(select(Post.id, Post.author_sentiment)
+                                  .where(Post.id.in_(post_ids), Post.author_sentiment.is_not(None))).all())
+    if not labels:
+        return results
+    counts = dict(session.execute(select(StockMention.post_id, func.count())
+                                  .where(StockMention.post_id.in_(list(labels)))
+                                  .group_by(StockMention.post_id)).all())
+    out = []
+    for m, r in zip(mentions, results):
+        label = labels.get(m.post_id)
+        if label and counts.get(m.post_id) == 1:
+            reasons_ = [x for x in r.reasons if x[0] == label] or \
+                sentiment.reasons.fallback_reasons(m.context, label)
+            r = sentiment.SentimentResult(label, 0.9, "author_label", reasons_)
+        out.append(r)
+    return out
 
 
 def reasons_by_ticker(session: Session, week: date, tickers: list[str] | None = None) -> dict[str, dict]:
@@ -241,7 +347,10 @@ def compute_week_metrics(session: Session, week: date) -> list[dict]:
                for w in weeks_with_data(session, week, BASELINE_WEEKS)]
     baselines = metrics.build_baselines(history)
     n_subs = len({r.subreddit for r in current_rows}) or 1
-    rows = metrics.build_metric_rows(current, baselines, n_subs)
+    reddit, _days = load_reddit_week(session, week)
+    reddit_prev, reddit_avg = reddit_baselines(session, week) if reddit is not None else (None, None)
+    rows = metrics.build_metric_rows(current, baselines, n_subs, reddit, reddit_prev, reddit_avg,
+                                     settings.reddit_min_weekly_mentions)
 
     attach_prices(session, week, rows)
     company_ids = dict(session.execute(select(Company.ticker, Company.id)).all())
@@ -251,8 +360,20 @@ def compute_week_metrics(session: Session, week: date) -> list[dict]:
     return rows
 
 
+def attention_change(row: dict, text_label: str) -> tuple[float | None, str]:
+    """Which attention change to compare with price: Reddit counts when they have a previous week
+    (complete volume), otherwise the text sample. Returns (change_pct, source label)."""
+    if row.get("reddit_prev_mentions") is not None:
+        return row["reddit_change_pct"], "Reddit"
+    return row["mention_change_pct"], text_label
+
+
 def attach_prices(session: Session, week: date, rows: list[dict]) -> None:
     """Price change for the top-N stocks (cached in weekly_prices) + neutral comparison sentence."""
+    platforms = {p for (p,) in session.execute(
+        select(Subreddit.platform).distinct().join(StockMention, StockMention.subreddit_id == Subreddit.id)
+        .where(StockMention.week_start == week)).all()}
+    text_label = "StockTwits" if platforms == {"stocktwits"} else "Reddit"
     for r in rows:
         r["price_change_pct"], r["attention_vs_price"] = None, None
     provider = market_data.get_provider()
@@ -279,7 +400,8 @@ def attach_prices(session: Session, week: date, rows: list[dict]) -> None:
         p = have.get(r["ticker"])
         if p is not None:
             r["price_change_pct"] = p.change_pct
-            r["attention_vs_price"] = market_data.describe_attention_vs_price(r["mention_change_pct"], p.change_pct)
+            change, source = attention_change(r, text_label)
+            r["attention_vs_price"] = market_data.describe_attention_vs_price(change, p.change_pct, source)
 
 
 def build_overview(session: Session, week: date, metric_rows: list[dict]) -> dict:
@@ -303,6 +425,25 @@ def build_overview(session: Session, week: date, metric_rows: list[dict]) -> dic
         [{"subreddit": s, "posts": sub_posts.get(s, 0), "comments": sub_comments.get(s, 0),
           "mentions": sub_mentions.get(s, 0)} for s in set(sub_posts) | set(sub_comments)],
         key=lambda x: -x["mentions"])
+    reddit, days = load_reddit_week(session, week)
+    reddit_overview = None
+    if reddit is not None:
+        comm_totals: dict[str, float] = {}
+        for w in reddit.values():
+            for c, v in w.distribution.items():
+                comm_totals[c] = comm_totals.get(c, 0.0) + v
+        reddit_overview = {
+            "source": session.scalar(select(AttentionSnapshot.source).where(
+                AttentionSnapshot.snapshot_date >= week,
+                AttentionSnapshot.snapshot_date < week + timedelta(days=7)).limit(1)),
+            "days_covered": days,
+            "total_mentions": round(sum(w.mentions for w in reddit.values())),
+            "tickers": len(reddit),
+            "communities": {c: round(v) for c, v in sorted(comm_totals.items(), key=lambda x: -x[1])},
+        }
+    platforms = sorted({p or "reddit" for (p,) in session.execute(
+        select(Subreddit.platform).distinct().join(StockMention, StockMention.subreddit_id == Subreddit.id)
+        .where(StockMention.week_start == week)).all()})
     methods = {r for (r,) in session.execute(select(StockMention.sentiment_method).distinct()
                                              .where(StockMention.week_start == week)).all() if r}
     return {
@@ -315,6 +456,8 @@ def build_overview(session: Session, week: date, metric_rows: list[dict]) -> dic
         "stocks_detected": len(metric_rows),
         "sentiment": metrics.sentiment_totals(mention_rows),
         "sentiment_methods": sorted(methods),
+        "reddit_attention": reddit_overview,
+        "text_platforms": platforms,
         "price_source": session.scalar(select(WeeklyPrice.source).where(WeeklyPrice.week_start == week).limit(1)),
         "subreddit_activity": subreddit_activity,
     }
@@ -347,6 +490,62 @@ def process_week(collector: Collector, week: date) -> dict:
     return stats
 
 
+def stocktwits_universe(session: Session, now_week: date) -> list[str]:
+    """Which StockTwits symbol streams to read: Reddit's most-discussed and fastest-rising
+    tickers (ApeWisdom, last 7 days) + StockTwits trending + the configured watchlist."""
+    n = settings.stocktwits_universe_size
+    since = datetime.utcnow().date() - timedelta(days=7)
+    top = session.execute(
+        select(AttentionSnapshot.ticker, func.sum(AttentionSnapshot.mentions).label("m"))
+        .where(AttentionSnapshot.snapshot_date >= since)
+        .group_by(AttentionSnapshot.ticker).order_by(func.sum(AttentionSnapshot.mentions).desc())
+        .limit(n)).all()
+    picked = [t for t, _ in top][: max(1, n * 2 // 3)]
+    # risers: biggest increase of the latest snapshot vs. the average of the window
+    latest = session.scalar(select(func.max(AttentionSnapshot.snapshot_date)))
+    if latest:
+        last = dict(session.execute(select(AttentionSnapshot.ticker, func.sum(AttentionSnapshot.mentions))
+                                    .where(AttentionSnapshot.snapshot_date == latest)
+                                    .group_by(AttentionSnapshot.ticker)).all())
+        avg = dict(session.execute(select(AttentionSnapshot.ticker, func.avg(AttentionSnapshot.mentions))
+                                   .where(AttentionSnapshot.snapshot_date >= since)
+                                   .group_by(AttentionSnapshot.ticker)).all())
+        risers = sorted(((last[t] / max(float(avg.get(t) or 1), 1.0), t) for t in last if last[t] >= 10),
+                        reverse=True)
+        picked += [t for _, t in risers]
+    ordered = list(dict.fromkeys(picked + settings.stocktwits_watchlist))
+    return ordered[: n + len(settings.stocktwits_watchlist)]
+
+
+def prepare_collector(collector: Collector, week: date) -> None:
+    """Give incremental collectors their universe and the ids already stored for the week."""
+    if getattr(collector, "name", "") != "stocktwits":
+        return
+    with session_scope() as session:
+        universe = stocktwits_universe(session, week)
+        known = set(session.scalars(select(Post.reddit_id).where(Post.week_start == week,
+                                                                 Post.reddit_id.like("st_%"))))
+    trending = collector.trending() if hasattr(collector, "trending") else []
+    collector.symbols = list(dict.fromkeys(universe + trending))
+    collector.known_ids = known
+
+
+def collect_now() -> dict:
+    """Light job for the scheduler (COLLECT_CRON): snapshot Reddit attention for today and pull new
+    text for the CURRENT week (stored raw; analysed when the week is complete)."""
+    out = {"attention": collect_attention([])}
+    collector = get_collector()
+    if getattr(collector, "incremental", False):
+        week = week_start_of(datetime.utcnow())
+        prepare_collector(collector, week)
+        data = collector.collect(week)
+        with session_scope() as session:
+            store_raw(session, data)
+        out["text"] = {"source": collector.name, "week_start": week.isoformat(), "new_items": len(data.posts)}
+    log.info("collection finished", extra=out)
+    return out
+
+
 def run_analysis(week_start: date | None = None, collector: Collector | None = None) -> dict:
     """Process the target week and the week(s) before it, oldest first.
 
@@ -362,8 +561,13 @@ def run_analysis(week_start: date | None = None, collector: Collector | None = N
         weeks = [target - timedelta(days=7 * i) for i in range(n - 1, -1, -1)]
         log.info("analysis started", extra={"collector": getattr(collector, "name", "?"),
                                             "weeks": [w.isoformat() for w in weeks], "llm": settings.use_llm})
-        results = [process_week(collector, w) for w in weeks]
+        att = collect_attention([weeks[0] + timedelta(days=i) for i in range(7 * len(weeks))])
+        results = []
+        for w in weeks:
+            prepare_collector(collector, w)
+            results.append(process_week(collector, w))
         return {"mode": "demo" if getattr(collector, "name", "") == "demo" else "live",
+                "text_source": getattr(collector, "name", "?"), "attention": att,
                 "llm": settings.use_llm, "weeks": results}
     finally:
         api_cache.clear()

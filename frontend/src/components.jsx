@@ -1,6 +1,6 @@
 import React from "react";
 import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { changeClass, fmtChange, fmtInt, fmtPct } from "./format.js";
+import { changeClass, community, fmtChange, fmtInt, fmtPct } from "./format.js";
 
 // Sentiment is polarity -> diverging pair (blue = bullish, red = bearish) with gray neutral.
 // Colour is never alone: segments have gaps, a legend, and text labels/tooltips.
@@ -34,14 +34,26 @@ export function Overview({ overview, prevOverview }) {
     return (100 * (overview[k] - prevOverview[k])) / prevOverview[k];
   };
   const tiles = [
-    ["Posts", "posts"],
+    ["Posts / messages", "posts"],
     ["Comments", "comments"],
-    ["Stock mentions", "total_mentions"],
+    ["Text mentions", "total_mentions"],
     ["Unique authors", "unique_authors"],
     ["Stocks detected", "stocks_detected"],
   ];
+  const ra = overview.reddit_attention;
+  const pra = prevOverview?.reddit_attention;
+  const rd = ra && pra?.total_mentions ? (100 * (ra.total_mentions - pra.total_mentions)) / pra.total_mentions : null;
   return (
     <div className="tiles">
+      {ra && (
+        <div className="tile tile-reddit" title="Estimated weekly Reddit mentions from daily count snapshots (no text)">
+          <div className="tile-label">Reddit mentions (est.)</div>
+          <div className="tile-value">{fmtInt(ra.total_mentions)}</div>
+          <div className={`tile-delta ${changeClass(rd)}`}>
+            {rd == null ? "" : `${fmtChange(rd)} vs prev week · `}{ra.days_covered}/7 days · {ra.source === "demo" ? "demo" : "ApeWisdom"}
+          </div>
+        </div>
+      )}
       {tiles.map(([label, k]) => {
         const d = delta(k);
         return (
@@ -74,14 +86,25 @@ function ScoreBar({ score }) {
 }
 
 export function TopTable({ stocks }) {
+  const hasReddit = stocks.some((s) => s.reddit_mentions != null);
   return (
     <div className="table-wrap">
       <table className="data-table">
         <thead>
+          {hasReddit && (
+            <tr className="group-head">
+              <th colSpan={3} />
+              <th colSpan={2} className="grp">Reddit · counts</th>
+              <th colSpan={5} className="grp">Text sample · who &amp; why</th>
+              <th colSpan={2} />
+            </tr>
+          )}
           <tr>
             <th className="num">#</th>
             <th>Ticker</th>
             <th>Company</th>
+            {hasReddit && <th className="num">Mentions</th>}
+            {hasReddit && <th className="num">WoW</th>}
             <th className="num">Mentions</th>
             <th className="num">Authors</th>
             <th className="num">WoW</th>
@@ -97,14 +120,20 @@ export function TopTable({ stocks }) {
               <td className="num muted">{s.rank}</td>
               <td className="ticker"><a href={`#/stock/${s.ticker}`}>{s.ticker}</a></td>
               <td className="company" title={s.company}>{s.company}</td>
-              <td className="num">{fmtInt(s.mentions)}</td>
+              {hasReddit && <td className="num">{s.reddit_mentions == null ? "–" : fmtInt(s.reddit_mentions)}</td>}
+              {hasReddit && (
+                <td className={`num ${s.reddit_prev_mentions == null ? "" : changeClass(s.reddit_change_pct)}`}>
+                  {s.reddit_prev_mentions == null ? "–" : fmtChange(s.reddit_change_pct)}
+                </td>
+              )}
+              <td className="num">{s.mentions ? fmtInt(s.mentions) : <span className="muted">–</span>}</td>
               <td className="num" title={`Top single author wrote ${(s.top_author_share * 100).toFixed(0)}% of mentions`}>
                 {fmtInt(s.unique_authors)}
                 {s.top_author_share >= 0.25 && <span className="warn-dot" aria-label="concentrated">●</span>}
               </td>
-              <td className={`num ${changeClass(s.mention_change_pct)}`}>{fmtChange(s.mention_change_pct)}</td>
-              <td className="num">{fmtPct(s.bullish_pct)}</td>
-              <td className="num">{fmtPct(s.bearish_pct)}</td>
+              <td className={`num ${s.mentions ? changeClass(s.mention_change_pct) : ""}`}>{s.mentions ? fmtChange(s.mention_change_pct) : "–"}</td>
+              <td className="num">{s.mentions ? fmtPct(s.bullish_pct) : "–"}</td>
+              <td className="num">{s.mentions ? fmtPct(s.bearish_pct) : "–"}</td>
               <td><ScoreBar score={s.trend_score} /></td>
               <td><TrendBadge cls={s.trend_class} /></td>
             </tr>
@@ -114,6 +143,7 @@ export function TopTable({ stocks }) {
       <p className="muted small footnote">
         <span className="warn-dot">●</span> one account wrote ≥25% of this stock's mentions, so mention counts overstate breadth.
         WoW = week-over-week change in mentions; NEW = no mentions the previous week.
+        {hasReddit && " Reddit counts are estimated weekly mentions from daily snapshots (no text, so no sentiment). \"–\" in the text columns = the ticker wasn't in the text sample."}
       </p>
     </div>
   );
@@ -139,10 +169,19 @@ export function EmergingCards({ stocks, mode = "trend" }) {
             <span className="muted small">{mode === "early" ? "early signal score" : "trend score"}</span>
           </div>
           <dl className="em-stats">
-            <div><dt>Mentions</dt><dd>{s.prev_mentions} → {s.mentions} <span className={changeClass(s.mention_change_pct)}>({fmtChange(s.mention_change_pct)})</span></dd></div>
-            <div><dt>Authors</dt><dd>{s.prev_unique_authors} → {s.unique_authors} <span className={changeClass(s.author_change_pct)}>({fmtChange(s.author_change_pct)})</span></dd></div>
-            <div><dt>Subreddits</dt><dd>{s.subreddit_count}</dd></div>
-            <div><dt>Bull / Bear</dt><dd>{fmtPct(s.bullish_pct)} / {fmtPct(s.bearish_pct)}</dd></div>
+            {s.reddit_mentions != null && (
+              <div><dt>Reddit</dt><dd>{s.reddit_prev_mentions == null ? "" : `${fmtInt(s.reddit_prev_mentions)} → `}{fmtInt(s.reddit_mentions)} <span className={changeClass(s.reddit_change_pct)}>{s.reddit_prev_mentions == null ? "" : `(${fmtChange(s.reddit_change_pct)})`}</span></dd></div>
+            )}
+            {s.mentions > 0 ? (
+              <>
+                <div><dt>Text mentions</dt><dd>{s.prev_mentions} → {s.mentions} <span className={changeClass(s.mention_change_pct)}>({fmtChange(s.mention_change_pct)})</span></dd></div>
+                <div><dt>Authors</dt><dd>{s.prev_unique_authors} → {s.unique_authors} <span className={changeClass(s.author_change_pct)}>({fmtChange(s.author_change_pct)})</span></dd></div>
+                <div><dt>Bull / Bear</dt><dd>{fmtPct(s.bullish_pct)} / {fmtPct(s.bearish_pct)}</dd></div>
+              </>
+            ) : (
+              <div><dt>Text</dt><dd className="muted">not in text sample</dd></div>
+            )}
+            <div><dt>Communities</dt><dd>{new Set([...Object.keys(s.subreddit_distribution || {}), ...Object.keys(s.reddit_distribution || {})]).size}</dd></div>
             {mode === "early" && <div><dt>Avg engagement</dt><dd>▲ {fmtInt(Math.round(s.avg_engagement))}</dd></div>}
           </dl>
           {s.attention_vs_price && mode !== "early" && <p className="em-note muted small">{s.attention_vs_price.split(". ")[0]}.</p>}
@@ -231,7 +270,7 @@ function SubTooltip({ active, payload }) {
   const r = payload[0].payload;
   return (
     <div className="tooltip">
-      <div className="tooltip-title">r/{r.subreddit}</div>
+      <div className="tooltip-title">{community(r.subreddit)}</div>
       <div className="tooltip-row"><span /><span>Stock mentions</span><span className="num">{r.mentions}</span></div>
       <div className="tooltip-row"><span /><span>Posts</span><span className="num">{r.posts}</span></div>
       <div className="tooltip-row"><span /><span>Comments</span><span className="num">{r.comments}</span></div>
@@ -240,7 +279,7 @@ function SubTooltip({ active, payload }) {
 }
 
 export function SubredditChart({ activity }) {
-  const data = activity.map((a) => ({ ...a, name: `r/${a.subreddit}` }));
+  const data = activity.map((a) => ({ ...a, name: community(a.subreddit) }));
   return (
     <ResponsiveContainer width="100%" height={40 * data.length + 30}>
       <BarChart data={data} layout="vertical" margin={{ top: 4, right: 40, bottom: 0, left: 0 }} barCategoryGap={10}>
@@ -290,12 +329,12 @@ export function SubredditTable({ subs }) {
     <div className="table-wrap">
       <table className="data-table compact">
         <thead>
-          <tr><th>Subreddit</th><th className="num">Authors</th><th className="num">Bull</th><th className="num">Bear</th><th>Most discussed</th></tr>
+          <tr><th>Community</th><th className="num">Authors</th><th className="num">Bull</th><th className="num">Bear</th><th>Most discussed</th></tr>
         </thead>
         <tbody>
           {subs.map((s) => (
             <tr key={s.subreddit}>
-              <td>r/{s.subreddit}</td>
+              <td>{community(s.subreddit)}</td>
               <td className="num">{fmtInt(s.mentioning_authors)}</td>
               <td className="num">{fmtPct(s.bullish_pct)}</td>
               <td className="num">{fmtPct(s.bearish_pct)}</td>
@@ -309,5 +348,32 @@ export function SubredditTable({ subs }) {
         </tbody>
       </table>
     </div>
+  );
+}
+
+export function RedditCommunities({ comms }) {
+  if (!comms?.length) return null;
+  return (
+    <>
+      <h3 className="sub-head">Reddit attention by subreddit <span className="muted small">(counts only · est. weekly mentions)</span></h3>
+      <div className="table-wrap">
+        <table className="data-table compact">
+          <thead><tr><th>Subreddit</th><th className="num">Mentions</th><th>Most discussed</th></tr></thead>
+          <tbody>
+            {comms.map((c) => (
+              <tr key={c.community}>
+                <td>r/{c.community}</td>
+                <td className="num">{fmtInt(c.mentions)}</td>
+                <td className="tickers-cell">
+                  {c.top_tickers.slice(0, 4).map((t) => (
+                    <a key={t.ticker} href={`#/stock/${t.ticker}`} className="chip">{t.ticker} <span className="muted">{fmtInt(t.mentions)}</span></a>
+                  ))}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }

@@ -111,16 +111,17 @@ def _direction(pct: float | None, threshold: float) -> int:
     return 1 if pct > threshold else -1 if pct < -threshold else 0
 
 
-def describe_attention_vs_price(attention_change_pct: float | None, price_change_pct: float | None) -> str | None:
-    """Neutral, non-causal sentence comparing Reddit attention with the price move."""
+def describe_attention_vs_price(attention_change_pct: float | None, price_change_pct: float | None,
+                                source: str = "Reddit") -> str | None:
+    """Neutral, non-causal sentence comparing attention on `source` with the price move."""
     if price_change_pct is None:
         return None
     if attention_change_pct is None:
-        att = "Reddit attention was new this week"
+        att = f"{source} attention was new this week"
     else:
-        att = {1: f"Reddit attention increased ({attention_change_pct:+.0f}%)",
-               -1: f"Reddit attention decreased ({attention_change_pct:+.0f}%)",
-               0: f"Reddit attention was roughly flat ({attention_change_pct:+.0f}%)"}[_direction(attention_change_pct, 10)]
+        att = {1: f"{source} attention increased ({attention_change_pct:+.0f}%)",
+               -1: f"{source} attention decreased ({attention_change_pct:+.0f}%)",
+               0: f"{source} attention was roughly flat ({attention_change_pct:+.0f}%)"}[_direction(attention_change_pct, 10)]
     a_dir, p_dir = _direction(attention_change_pct, 10), _direction(price_change_pct, 1)
     verb = {1: "rose", -1: "fell", 0: "was roughly flat"}[p_dir]
     also = " also" if a_dir == p_dir and p_dir != 0 else ""
