@@ -616,3 +616,13 @@ def test_run_endpoint_is_async_and_reports_progress(analysed_db, monkeypatch):
         assert h["analysis_running"] and h["progress"]["step"] == "Week 1 of 2: test"
         assert c.post("/analysis/run").status_code == 409
         gate.set()
+
+
+def test_apewisdom_drops_blacklisted_words(monkeypatch):
+    monkeypatch.setattr(settings, "apewisdom_filters", ["Daytrading"])
+
+    def handler(req):
+        return httpx.Response(200, json={"pages": 1, "results": [
+            {"ticker": "DTE", "mentions": 14}, {"ticker": "ALL", "mentions": 7}, {"ticker": "AAPL", "mentions": 7}]})
+    rows = ApeWisdomProvider(client_for(handler)).snapshot(WEEK)
+    assert [r.ticker for r in rows] == ["AAPL"]

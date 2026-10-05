@@ -71,6 +71,9 @@ class ApeWisdomProvider:
         self.client = client or JsonClient()
 
     def snapshot(self, day: date) -> list[SnapshotRow]:
+        # ApeWisdom counts bare words too ("ALL", "DTE" = days to expiration): apply our blacklist.
+        from .reference import get_reference
+        blacklist = get_reference().blacklist
         rows: list[SnapshotRow] = []
         for flt in settings.apewisdom_filters:
             page, pages = 1, 1
@@ -84,7 +87,7 @@ class ApeWisdomProvider:
                     log.warning("apewisdom filter failed", extra={"filter": flt, "error": repr(exc)})
                     break
                 rows.extend(r for r in parse_apewisdom_page(data, flt)
-                            if r.ticker not in settings.apewisdom_exclude)
+                            if r.ticker not in settings.apewisdom_exclude and r.ticker not in blacklist)
                 pages = _int(data.get("pages")) or 1
                 page += 1
         log.info("apewisdom snapshot", extra={"rows": len(rows), "filters": settings.apewisdom_filters})

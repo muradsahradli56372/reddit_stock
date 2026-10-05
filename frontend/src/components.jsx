@@ -29,8 +29,11 @@ export function Card({ title, subtitle, children, className = "", right }) {
 }
 
 export function Overview({ overview, prevOverview }) {
+  // Only compare with last week when both are complete, fully collected weeks.
+  const comparable = prevOverview && !overview.in_progress && overview.baseline_available !== false &&
+    prevOverview.text_coverage?.complete !== false && overview.text_coverage?.complete !== false;
   const delta = (k) => {
-    if (!prevOverview || !prevOverview[k]) return null;
+    if (!comparable || !prevOverview[k]) return null;
     return (100 * (overview[k] - prevOverview[k])) / prevOverview[k];
   };
   const tiles = [
@@ -42,6 +45,7 @@ export function Overview({ overview, prevOverview }) {
   ];
   const ra = overview.reddit_attention;
   const pra = prevOverview?.reddit_attention;
+  // Reddit counts are per-day estimates, so they compare fairly even mid-week (when both weeks have data).
   const rd = ra && pra?.total_mentions ? (100 * (ra.total_mentions - pra.total_mentions)) / pra.total_mentions : null;
   return (
     <div className="tiles">

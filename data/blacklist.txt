@@ -136,3 +136,12 @@ HIVE
 SERV
 TEM
 DOW
+# Options / trading jargon and words seen as false positives in Reddit counts
+DTE
+AGI
+ATM
+LEAPS
+EPS
+FOMC
+YOY
+QOQ

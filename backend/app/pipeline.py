@@ -46,7 +46,7 @@ def set_progress(step: str | None, **detail) -> None:
         progress.update({"step": step, "since": datetime.utcnow().isoformat(timespec="seconds"), **detail})
 BASELINE_WEEKS = 4
 # Bump when the analysis logic changes; reports made by older logic are recomputed on startup.
-ANALYSIS_VERSION = 4
+ANALYSIS_VERSION = 5
 
 
 def content_hash(text: str) -> str:
@@ -149,7 +149,9 @@ def load_reddit_week(session: Session, week: date) -> tuple[dict | None, int]:
                AttentionSnapshot.snapshot_date < week + timedelta(days=7))).all()
     if not rows:
         return None, 0
-    return attention.aggregate_week([tuple(r) for r in rows])
+    # Also filters snapshots stored before a word was added to the blacklist.
+    blacklist = get_reference().blacklist | settings.apewisdom_exclude
+    return attention.aggregate_week([tuple(r) for r in rows if r[1] not in blacklist])
 
 
 def reddit_baselines(session: Session, week: date) -> tuple[dict | None, dict | None]:

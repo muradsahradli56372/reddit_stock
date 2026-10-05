@@ -134,7 +134,9 @@ def template_summary(overview: dict, metrics: list[dict], reasons: dict | None =
         interp.append(f"Discussion of {m['ticker']} cooled; bearish share is {m['bearish_pct']:.0f}% of mentions"
                       + (f", most often citing {bear}." if bear else "."))
     if not interp:
-        interp.append("No stock showed attention growth clearly above its own baseline this week.")
+        interp.append("Trends are not rated yet: there is no comparable earlier week, so growth can't be judged."
+                      if overview.get("baseline_available") is False else
+                      "No stock showed attention growth clearly above its own baseline this week.")
 
     # Speculation: hypotheses only, clearly conditional.
     for m in movers[:2]:

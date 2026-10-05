@@ -111,7 +111,7 @@ select, .btn {
 .score-track { flex: 1; height: 6px; background: var(--surface-2); border-radius: 3px; overflow: hidden; }
 .score-fill { display: block; height: 100%; background: var(--series-1); border-radius: 3px; }
 
-.badge { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: 0.06em; padding: 2px 7px; border-radius: 4px; border: 1px solid; }
+.badge { display: inline-block; white-space: nowrap; font-size: 10px; font-weight: 700; letter-spacing: 0.06em; padding: 2px 7px; border-radius: 4px; border: 1px solid; }
 .badge-emerging { color: var(--emerging); border-color: var(--emerging); }
 .badge-rising { color: var(--up); border-color: var(--rising); }
 .badge-stable { color: var(--text-muted); border-color: var(--border); }
