@@ -4,7 +4,9 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 
-from . import trend
+import statistics
+
+from . import signals, trend
 
 
 @dataclass(frozen=True)
@@ -14,6 +16,7 @@ class MentionRow:
     source_type: str  # "post" | "comment"
     subreddit: str
     sentiment: str | None
+    engagement: int = 0  # score (upvotes) of the post/comment
 
 
 @dataclass
@@ -26,6 +29,11 @@ class StockWeek:
     author_counts: Counter = field(default_factory=Counter)
     sentiment: Counter = field(default_factory=Counter)
     subreddits: Counter = field(default_factory=Counter)
+    engagement_sum: int = 0
+
+    @property
+    def avg_engagement(self) -> float:
+        return self.engagement_sum / self.mentions if self.mentions else 0.0
 
     @property
     def unique_authors(self) -> int:
@@ -66,6 +74,7 @@ def aggregate_week(rows: list[MentionRow]) -> dict[str, StockWeek]:
             s.author_counts[r.author] += 1
         s.sentiment[r.sentiment or "unclear"] += 1
         s.subreddits[r.subreddit] += 1
+        s.engagement_sum += max(r.engagement or 0, 0)
     return out
 
 
@@ -105,8 +114,12 @@ def build_metric_rows(current: dict[str, StockWeek], baselines: dict[str, Baseli
                       subreddits_in_dataset: int) -> list[dict]:
     """Produce one metrics dict per ticker mentioned this week, ranked by mentions."""
     rows = []
+    eligible = [s.avg_engagement for s in current.values() if s.mentions >= signals.MIN_MENTIONS]
+    median_eng = statistics.median(eligible) if eligible else 0.0
     for tk, s in current.items():
         b = baselines.get(tk, Baseline())
+        early = signals.early_signal_score(s.mentions, b.avg_mentions, s.unique_authors, b.avg_unique_authors,
+                                           len(s.subreddits), s.avg_engagement, median_eng)
         score = trend.trend_score(s.mentions, b.avg_mentions, s.unique_authors, b.avg_unique_authors,
                                   len(s.subreddits), subreddits_in_dataset)
         rows.append({
@@ -133,6 +146,9 @@ def build_metric_rows(current: dict[str, StockWeek], baselines: dict[str, Baseli
             "comment_change_pct": pct_change(s.comment_mentions, b.prev_comment_mentions),
             "trend_score": score,
             "trend_class": trend.classify(score, s.mentions, b.avg_mentions),
+            "avg_engagement": round(s.avg_engagement, 1),
+            "early_signal_score": early,
+            "is_early_signal": signals.is_early_signal(early, s.mentions, b.avg_mentions),
         })
     rows.sort(key=lambda r: (-r["mentions"], -r["unique_authors"], r["ticker"]))
     for i, r in enumerate(rows, start=1):

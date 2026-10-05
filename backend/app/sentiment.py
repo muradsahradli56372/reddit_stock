@@ -13,10 +13,11 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field
 
-from . import llm
+from . import llm, reasons
 from .config import settings
+from .llm_cache import Cache, make_key
 
 log = logging.getLogger(__name__)
 
@@ -65,6 +66,7 @@ class SentimentResult:
     label: str
     confidence: float
     method: str
+    reasons: list[tuple[str, str]] = field(default_factory=list)  # [(stance, category)]
 
 
 def _focus_clause(context: str, matched_text: str) -> str:
@@ -101,7 +103,9 @@ def fallback_sentiment(context: str, matched_text: str) -> SentimentResult:
     res = _score(clause) if clause != context else None
     if res is None:
         res = _score(context)
-    return res or SentimentResult("neutral", 0.4, "fallback_keywords")
+    res = res or SentimentResult("neutral", 0.4, "fallback_keywords")
+    res.reasons = reasons.fallback_reasons(clause, res.label) or reasons.fallback_reasons(context, res.label)
+    return res
 
 
 SYSTEM = (
@@ -110,39 +114,59 @@ SYSTEM = (
     "bullish (expects it to rise / positive), bearish (expects it to fall / negative), neutral "
     "(factual, question, no stance) or unclear (sarcasm or mixed signals you cannot resolve). "
     "Understand finance slang: 'to the moon', 'puts', 'bagholder', 'priced in'. Regret about having "
-    "sold is bullish. Reply with ONLY a JSON array: "
-    '[{"id": <id>, "sentiment": "bullish|neutral|bearish|unclear", "confidence": 0.0-1.0}].'
+    "sold is bullish.\n"
+    "Also give up to 2 REASONS the author states for a bullish/bearish stance, chosen ONLY from this "
+    "taxonomy (use the category key; reasons must match the stance; none for neutral/unclear or if "
+    "no reason is given):\n" + reasons.taxonomy_for_prompt() + "\n"
+    "Reply with ONLY a JSON array: "
+    '[{"id": <id>, "sentiment": "bullish|neutral|bearish|unclear", "confidence": 0.0-1.0, '
+    '"reasons": ["<category>", ...]}].'
 )
+TASK = "sentiment_v2"
 
 
-def _llm_batch(items: list[tuple[str, str, str]]) -> list[SentimentResult]:
+def _from_llm(d: dict, ctx: str, matched: str) -> SentimentResult:
+    label = str(d.get("sentiment", "")).lower()
+    if label not in LABELS:
+        return fallback_sentiment(ctx, matched)
+    rs = [(label, str(c)) for c in (d.get("reasons") or []) if reasons.valid(label, str(c))][:2]
+    return SentimentResult(label, float(d.get("confidence", 0.7)), "llm", rs)
+
+
+def _llm_batch(items: list[tuple[str, str, str]]) -> list[dict | None]:
     payload = [{"id": i, "ticker": tk, "text": ctx} for i, (tk, ctx, _m) in enumerate(items)]
-    data = llm.complete_json(settings.llm_fast_model, SYSTEM, json.dumps(payload), max_tokens=2000)
+    data = llm.complete_json(settings.llm_fast_model, SYSTEM, json.dumps(payload), max_tokens=3000)
     by_id = {int(d["id"]): d for d in data if isinstance(d, dict) and "id" in d}
-    out = []
-    for i, (tk, ctx, matched) in enumerate(items):
-        d = by_id.get(i)
-        label = str(d.get("sentiment", "")).lower() if d else ""
-        if label in LABELS:
-            out.append(SentimentResult(label, float(d.get("confidence", 0.7)), "llm"))
-        else:
-            out.append(fallback_sentiment(ctx, matched))
-    return out
+    return [by_id.get(i) for i in range(len(items))]
 
 
-def classify(items: list[tuple[str, str, str]]) -> list[SentimentResult]:
-    """items: (ticker, context, matched_text). Returns one result per item, same order."""
+def classify(items: list[tuple[str, str, str]], cache: Cache | None = None) -> list[SentimentResult]:
+    """items: (ticker, context, matched_text). Returns one result per item, same order.
+
+    With an LLM: answers are cached per (ticker, context), only uncached items are sent, in batches.
+    """
     if not items:
         return []
     if not settings.use_llm:
         return [fallback_sentiment(ctx, m) for _tk, ctx, m in items]
-    out: list[SentimentResult] = []
+    cache = cache or Cache(None)
+    keys = [make_key(TASK, settings.llm_fast_model, f"{tk}\n{ctx}") for tk, ctx, _m in items]
+    cached = cache.get_many(keys)
+    todo = [i for i, k in enumerate(keys) if k not in cached]
+    answers: dict[str, dict] = dict(cached)
     size = settings.llm_batch_size
-    for i in range(0, len(items), size):
-        batch = items[i:i + size]
+    for i in range(0, len(todo), size):
+        idx = todo[i:i + size]
         try:
-            out.extend(_llm_batch(batch))
+            got = _llm_batch([items[j] for j in idx])
         except Exception as exc:
-            log.warning("LLM sentiment failed (%s); using keyword fallback for %d items", exc, len(batch))
-            out.extend(fallback_sentiment(ctx, m) for _tk, ctx, m in batch)
+            log.warning("LLM sentiment failed (%s); using keyword fallback for %d items", exc, len(idx))
+            continue
+        fresh = {keys[j]: d for j, d in zip(idx, got) if d and str(d.get("sentiment", "")).lower() in LABELS}
+        answers.update(fresh)
+        cache.put_many(TASK, fresh)
+    out = []
+    for (tk, ctx, m), k in zip(items, keys):
+        d = answers.get(k)
+        out.append(_from_llm(d, ctx, m) if d else fallback_sentiment(ctx, m))
     return out

@@ -47,6 +47,7 @@ class Post(Base):
     week_start: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     is_demo: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    permalink: Mapped[str | None] = mapped_column(String(512))  # Phase 2
 
 
 class Comment(Base):
@@ -94,6 +95,8 @@ class StockMention(Base):
     sentiment: Mapped[str | None] = mapped_column(String(10))  # bullish|neutral|bearish|unclear
     sentiment_confidence: Mapped[float | None] = mapped_column(Float)
     sentiment_method: Mapped[str | None] = mapped_column(String(24))  # llm|fallback_keywords
+    reasons_extracted: Mapped[bool | None] = mapped_column(Boolean)  # Phase 2: NULL = not analysed yet
+    engagement: Mapped[int | None] = mapped_column(Integer)  # score of the post/comment at collection
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 
     __table_args__ = (
@@ -136,11 +139,61 @@ class WeeklyStockMetric(Base):
     trend_class: Mapped[str] = mapped_column(String(10), nullable=False)
     rank: Mapped[int] = mapped_column(Integer, nullable=False)
 
+    # Phase 2
+    avg_engagement: Mapped[float | None] = mapped_column(Float)
+    early_signal_score: Mapped[float | None] = mapped_column(Float)
+    is_early_signal: Mapped[bool | None] = mapped_column(Boolean)
+    price_change_pct: Mapped[float | None] = mapped_column(Float)
+    attention_vs_price: Mapped[str | None] = mapped_column(Text)
+
     __table_args__ = (
         UniqueConstraint("week_start", "ticker", name="uq_wsm_week_ticker"),
         Index("ix_wsm_week_change", "week_start", "mention_change_pct"),
         Index("ix_wsm_week_score", "week_start", "trend_score"),
+        Index("ix_wsm_ticker_week", "ticker", "week_start"),
     )
+
+
+class MentionReason(Base):
+    """Structured reason behind a mention's stance, from a fixed taxonomy (see app/reasons.py)."""
+    __tablename__ = "mention_reasons"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    mention_id: Mapped[int] = mapped_column(ForeignKey("stock_mentions.id", ondelete="CASCADE"), nullable=False)
+    ticker: Mapped[str] = mapped_column(String(10), nullable=False)
+    week_start: Mapped[date] = mapped_column(Date, nullable=False)
+    stance: Mapped[str] = mapped_column(String(8), nullable=False)  # bullish | bearish
+    category: Mapped[str] = mapped_column(String(32), nullable=False)
+    method: Mapped[str] = mapped_column(String(24), nullable=False)  # llm | fallback_keywords
+
+    __table_args__ = (
+        UniqueConstraint("mention_id", "category", name="uq_reason_mention_category"),
+        Index("ix_reasons_ticker_week", "ticker", "week_start"),
+    )
+
+
+class WeeklyPrice(Base):
+    """Cached weekly price change per ticker (from a MarketDataProvider)."""
+    __tablename__ = "weekly_prices"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker: Mapped[str] = mapped_column(String(10), nullable=False)
+    week_start: Mapped[date] = mapped_column(Date, nullable=False)
+    open_price: Mapped[float] = mapped_column(Float, nullable=False)
+    close_price: Mapped[float] = mapped_column(Float, nullable=False)
+    change_pct: Mapped[float] = mapped_column(Float, nullable=False)
+    source: Mapped[str] = mapped_column(String(16), nullable=False)  # yfinance | demo
+    fetched_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    __table_args__ = (UniqueConstraint("ticker", "week_start", name="uq_price_ticker_week"),)
+
+
+class LLMCache(Base):
+    """Cache of per-item LLM answers keyed by sha256(task, model, input). Avoids paying twice."""
+    __tablename__ = "llm_cache"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    task: Mapped[str] = mapped_column(String(32), nullable=False)
+    value: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 
 
 class WeeklyReport(Base):

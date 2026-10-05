@@ -21,7 +21,10 @@ def metric(ticker, week=ANCHOR):
 
 
 def test_both_weeks_processed(analysed_db):
-    assert [w["week_start"] for w in analysed_db["weeks"]] == [PREV.isoformat(), ANCHOR.isoformat()]
+    from app.config import settings
+    weeks = [w["week_start"] for w in analysed_db["weeks"]]
+    assert weeks[-2:] == [PREV.isoformat(), ANCHOR.isoformat()]
+    assert len(weeks) == settings.demo_history_weeks  # demo mode builds history
     assert all(w["summary_method"] == "template" for w in analysed_db["weeks"])
 
 
@@ -63,11 +66,11 @@ def test_heavy_author_counts_once(analysed_db):
     nvda = metric("NVDA")
     assert heavy_mentions >= 30
     assert nvda.unique_authors < nvda.mentions - heavy_mentions + 1 + 5  # heavy user adds only 1 author
-    assert nvda.top_author_share >= heavy_mentions / nvda.mentions - 1e-6
+    assert nvda.top_author_share >= heavy_mentions / nvda.mentions - 1e-3  # stored rounded to 3 dp
 
 
 def test_same_author_duplicate_text_counted_once(analysed_db):
-    assert analysed_db["weeks"][1]["duplicates_skipped"] >= 4
+    assert analysed_db["weeks"][-1]["duplicates_skipped"] >= 4
     with session_scope() as s:
         n = s.scalar(select(func.count()).select_from(StockMention).join(Comment, StockMention.comment_id == Comment.id)
                      .where(Comment.body == "NVDA to $500 by Christmas, mark my words 🚀",
@@ -103,3 +106,70 @@ def test_report_sections_separated(analysed_db):
     for key in ("data", "interpretation", "speculation", "disclaimer"):
         assert r.summary[key]
     assert r.overview["unique_authors"] > 0 and r.overview["total_mentions"] > 0
+
+
+def test_reasons_stored_and_idempotent(analysed_db):
+    from app.models import MentionReason, WeeklyPrice
+    with session_scope() as s:
+        n_reasons = s.scalar(select(func.count()).select_from(MentionReason))
+        n_prices = s.scalar(select(func.count()).select_from(WeeklyPrice))
+        pending = s.scalar(select(func.count()).select_from(StockMention)
+                           .where(StockMention.reasons_extracted.is_(None)))
+    assert n_reasons > 100 and n_prices > 0 and pending == 0
+    run_analysis(ANCHOR, collector=DemoCollector(anchor_week=ANCHOR))
+    with session_scope() as s:
+        assert s.scalar(select(func.count()).select_from(MentionReason)) == n_reasons
+        assert s.scalar(select(func.count()).select_from(WeeklyPrice)) == n_prices
+
+
+def test_early_signal_story(analysed_db):
+    assert metric("RKLB").is_early_signal and metric("ASTS").is_early_signal
+    assert not metric("NVDA").is_early_signal  # big and flat
+    assert metric("NVDA").early_signal_score < metric("RKLB").early_signal_score
+
+
+def test_engagement_and_prices_on_metrics(analysed_db):
+    m = metric("PLTR")
+    assert m.avg_engagement and m.avg_engagement > 0
+    assert m.price_change_pct is not None and "co-occurrence" in m.attention_vs_price
+
+
+def test_summary_mentions_reasons(analysed_db):
+    with session_scope() as s:
+        r = s.scalar(select(WeeklyReport).where(WeeklyReport.week_start == ANCHOR))
+    assert any("discussion centres on" in line for line in r.summary["interpretation"])
+    assert any("while the share price" in line for line in r.summary["data"])
+    assert "no causal link" in r.summary["disclaimer"]
+    assert r.overview["price_source"] == "demo"
+
+
+def test_edited_content_is_reextracted(analysed_db):
+    """A post whose text changed (edited on Reddit) loses stale mentions and gets fresh ones."""
+    from datetime import datetime
+
+    from app.collectors.base import CollectedWeek, RawPost
+    from app.pipeline import process_week
+
+    week = ANCHOR
+
+    class OneShot:
+        name = "test"
+
+        def __init__(self, body):
+            self.body = body
+
+        def collect(self, w):
+            return CollectedWeek(w, posts=[RawPost("edit_test_1", "stocks", "editor", "My pick", self.body, 5, 0,
+                                                   datetime(2026, 9, 29, 12))])
+
+    def tickers():
+        with session_scope() as s:
+            pid = s.scalar(select(Post.id).where(Post.reddit_id == "edit_test_1"))
+            return set(s.scalars(select(StockMention.ticker).where(StockMention.post_id == pid)))
+
+    process_week(OneShot("Loading up on AMD calls"), week)
+    assert tickers() == {"AMD"}
+    process_week(OneShot("Changed my mind, loading up on INTC calls"), week)
+    assert tickers() == {"INTC"}
+    process_week(OneShot("Changed my mind, loading up on INTC calls"), week)  # unchanged -> kept
+    assert tickers() == {"INTC"}

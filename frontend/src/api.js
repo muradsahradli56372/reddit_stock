@@ -29,5 +29,9 @@ export const api = {
   emerging: (week) => request(`/emerging${q(week)}`),
   sentiment: (week) => request(`/sentiment${q(week)}`),
   report: (week) => request(`/weekly-report${q(week)}`),
+  earlySignals: (week) => request(`/early-signals${q(week)}`),
+  subreddits: (week) => request(`/subreddits${q(week)}`),
+  stock: (ticker, week) => request(`/stocks/${encodeURIComponent(ticker)}${q(week)}`),
+  history: (ticker, weeks = 12) => request(`/stocks/${encodeURIComponent(ticker)}/history?weeks=${weeks}`),
   run: () => request("/analysis/run", { method: "POST", body: "{}" }),
 };

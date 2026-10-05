@@ -1,9 +1,27 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { api } from "./api.js";
-import { Card, EmergingCards, Overview, SentimentChart, SubredditChart, SummaryBox, TopTable } from "./components.jsx";
+import { Card, EmergingCards, Overview, SentimentChart, SubredditChart, SubredditTable, SummaryBox, TopTable } from "./components.jsx";
+import StockPage from "./StockPage.jsx";
+
+// Minimal hash router: "#/" = dashboard, "#/stock/RKLB" = stock detail.
+function parseRoute() {
+  const m = window.location.hash.match(/^#\/stock\/([A-Za-z.\-]{1,10})/);
+  return m ? { page: "stock", ticker: m[1].toUpperCase() } : { page: "home" };
+}
+
+function useRoute() {
+  const [route, setRoute] = useState(parseRoute);
+  useEffect(() => {
+    const onHash = () => { setRoute(parseRoute()); window.scrollTo(0, 0); };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+  return route;
+}
 import { fmtWeek } from "./format.js";
 
 export default function App() {
+  const route = useRoute();
   const [health, setHealth] = useState(null);
   const [weeks, setWeeks] = useState([]);
   const [week, setWeek] = useState(null);
@@ -26,11 +44,12 @@ export default function App() {
     try {
       const idx = allWeeks.findIndex((w) => w.week_start === wk);
       const prev = idx >= 0 && idx + 1 < allWeeks.length ? allWeeks[idx + 1].week_start : null;
-      const [stocks, emerging, sentiment, report, prevReport] = await Promise.all([
+      const [stocks, emerging, sentiment, report, prevReport, early, subs] = await Promise.all([
         api.stocks(wk), api.emerging(wk), api.sentiment(wk), api.report(wk),
-        prev ? api.report(prev) : Promise.resolve(null),
+        prev ? api.report(prev) : Promise.resolve(null), api.earlySignals(wk), api.subreddits(wk),
       ]);
-      setData({ stocks: stocks.stocks, emerging: emerging.stocks, sentiment, report, prevReport });
+      setData({ stocks: stocks.stocks, emerging: emerging.stocks, sentiment, report, prevReport,
+                early: early.stocks, subreddits: subs.subreddits });
     } catch (e) {
       setError(e.message);
       setData(null);
@@ -88,6 +107,7 @@ export default function App() {
         </div>
         <div className="controls">
           {health?.demo_mode && <span className="pill pill-demo" title="Reddit credentials not configured: using generated demo data">DEMO MODE</span>}
+          {health && !health.demo_mode && <span className="pill pill-ok" title="Collecting from Reddit">LIVE REDDIT</span>}
           {health && (
             <span className={`pill ${health.llm_enabled ? "pill-ok" : ""}`} title="Anthropic API key status">
               {health.llm_enabled ? "LLM: Claude" : "LLM: off (fallbacks)"}
@@ -111,7 +131,11 @@ export default function App() {
       {error && <div className="notice notice-error">{error}</div>}
       {loading && !data && <div className="loading">Loading…</div>}
 
-      {data && (
+      {route.page === "stock" && week && (
+        <StockPage key={`${route.ticker}:${week}`} ticker={route.ticker} week={week} />
+      )}
+
+      {route.page === "home" && data && (
         <main className={`grid ${loading ? "is-loading" : ""}`}>
           <div className="span-12">
             <Overview overview={data.report.overview} prevOverview={data.prevReport?.overview} />
@@ -130,8 +154,14 @@ export default function App() {
             <EmergingCards stocks={data.emerging} />
           </Card>
 
+          <Card className="span-12" title="Early signals"
+                subtitle="Smaller names whose discussion is broadening fast across people, subreddits and engagement. A screen for research, not a prediction">
+            <EmergingCards stocks={data.early} mode="early" />
+          </Card>
+
           <Card className="span-5" title="Subreddit activity" subtitle="Stock mentions per subreddit (hover for posts/comments)">
             <SubredditChart activity={data.report.overview.subreddit_activity} />
+            <SubredditTable subs={data.subreddits} />
           </Card>
 
           <Card className="span-7" title="Weekly AI summary" subtitle="Data, interpretation and speculation kept separate">

@@ -95,7 +95,7 @@ export function TopTable({ stocks }) {
           {stocks.map((s) => (
             <tr key={s.ticker}>
               <td className="num muted">{s.rank}</td>
-              <td className="ticker">{s.ticker}</td>
+              <td className="ticker"><a href={`#/stock/${s.ticker}`}>{s.ticker}</a></td>
               <td className="company" title={s.company}>{s.company}</td>
               <td className="num">{fmtInt(s.mentions)}</td>
               <td className="num" title={`Top single author wrote ${(s.top_author_share * 100).toFixed(0)}% of mentions`}>
@@ -119,30 +119,34 @@ export function TopTable({ stocks }) {
   );
 }
 
-export function EmergingCards({ stocks }) {
-  if (!stocks.length) return <p className="muted">No stock is gaining unusual attention this week.</p>;
+export function EmergingCards({ stocks, mode = "trend" }) {
+  if (!stocks.length) {
+    return <p className="muted">{mode === "early" ? "No early signals this week." : "No stock is gaining unusual attention this week."}</p>;
+  }
   return (
     <div className="em-grid">
       {stocks.map((s) => (
-        <article className="em-card" key={s.ticker}>
+        <a className="em-card" key={s.ticker} href={`#/stock/${s.ticker}`}>
           <div className="em-top">
             <div>
               <div className="ticker big">{s.ticker}</div>
               <div className="muted small">{s.company}</div>
             </div>
-            <TrendBadge cls={s.trend_class} />
+            {mode === "early" ? <span className="badge badge-early">EARLY SIGNAL</span> : <TrendBadge cls={s.trend_class} />}
           </div>
           <div className="em-score">
-            <span className="em-score-num">{s.trend_score.toFixed(0)}</span>
-            <span className="muted small">trend score</span>
+            <span className="em-score-num">{(mode === "early" ? s.early_signal_score : s.trend_score).toFixed(0)}</span>
+            <span className="muted small">{mode === "early" ? "early signal score" : "trend score"}</span>
           </div>
           <dl className="em-stats">
             <div><dt>Mentions</dt><dd>{s.prev_mentions} → {s.mentions} <span className={changeClass(s.mention_change_pct)}>({fmtChange(s.mention_change_pct)})</span></dd></div>
             <div><dt>Authors</dt><dd>{s.prev_unique_authors} → {s.unique_authors} <span className={changeClass(s.author_change_pct)}>({fmtChange(s.author_change_pct)})</span></dd></div>
             <div><dt>Subreddits</dt><dd>{s.subreddit_count}</dd></div>
             <div><dt>Bull / Bear</dt><dd>{fmtPct(s.bullish_pct)} / {fmtPct(s.bearish_pct)}</dd></div>
+            {mode === "early" && <div><dt>Avg engagement</dt><dd>▲ {fmtInt(Math.round(s.avg_engagement))}</dd></div>}
           </dl>
-        </article>
+          {s.attention_vs_price && mode !== "early" && <p className="em-note muted small">{s.attention_vs_price.split(". ")[0]}.</p>}
+        </a>
       ))}
     </div>
   );
@@ -277,6 +281,33 @@ export function SummaryBox({ report }) {
         ))}
       </div>
       <p className="disclaimer small">{s.disclaimer}</p>
+    </div>
+  );
+}
+
+export function SubredditTable({ subs }) {
+  return (
+    <div className="table-wrap">
+      <table className="data-table compact">
+        <thead>
+          <tr><th>Subreddit</th><th className="num">Authors</th><th className="num">Bull</th><th className="num">Bear</th><th>Most discussed</th></tr>
+        </thead>
+        <tbody>
+          {subs.map((s) => (
+            <tr key={s.subreddit}>
+              <td>r/{s.subreddit}</td>
+              <td className="num">{fmtInt(s.mentioning_authors)}</td>
+              <td className="num">{fmtPct(s.bullish_pct)}</td>
+              <td className="num">{fmtPct(s.bearish_pct)}</td>
+              <td className="tickers-cell">
+                {s.top_tickers.slice(0, 3).map((t) => (
+                  <a key={t.ticker} href={`#/stock/${t.ticker}`} className="chip">{t.ticker} <span className="muted">{t.mentions}</span></a>
+                ))}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from . import llm
 from .config import settings
 from .extraction import Candidate
+from .llm_cache import Cache, make_key
 from .reference import get_reference
 from .sentiment import BEARISH, BULLISH
 
@@ -70,7 +71,10 @@ SYSTEM = (
 )
 
 
-def _llm_batch(items: list[Candidate]) -> list[Decision]:
+TASK = "disambiguation_v1"
+
+
+def _llm_batch(items: list[Candidate]) -> list[dict | None]:
     ref = get_reference()
     payload = [
         {"id": i, "term": c.matched_text, "ticker": c.ticker,
@@ -79,28 +83,32 @@ def _llm_batch(items: list[Candidate]) -> list[Decision]:
     ]
     data = llm.complete_json(settings.llm_fast_model, SYSTEM, json.dumps(payload), max_tokens=1500)
     by_id = {int(d["id"]): d for d in data if isinstance(d, dict) and "id" in d}
-    out = []
-    for i, c in enumerate(items):
-        d = by_id.get(i)
-        if d is None:
-            out.append(rule_based(c))
-        else:
-            out.append(Decision(bool(d.get("is_stock")), float(d.get("confidence", 0.7)), "disambiguated_llm"))
-    return out
+    return [by_id.get(i) for i in range(len(items))]
 
 
-def resolve(items: list[Candidate]) -> list[Decision]:
+def resolve(items: list[Candidate], cache: Cache | None = None) -> list[Decision]:
     if not items:
         return []
     if not settings.use_llm:
         return [rule_based(c) for c in items]
-    decisions: list[Decision] = []
+    cache = cache or Cache(None)
+    keys = [make_key(TASK, settings.llm_fast_model, f"{c.ticker}\n{c.matched_text}\n{c.context}") for c in items]
+    answers = cache.get_many(keys)
+    todo = [i for i, k in enumerate(keys) if k not in answers]
     size = settings.llm_batch_size
-    for i in range(0, len(items), size):
-        batch = items[i:i + size]
+    for i in range(0, len(todo), size):
+        idx = todo[i:i + size]
         try:
-            decisions.extend(_llm_batch(batch))
+            got = _llm_batch([items[j] for j in idx])
         except Exception as exc:  # network, parse, rate limit -> never break the pipeline
-            log.warning("LLM disambiguation failed (%s); using rule-based fallback for %d items", exc, len(batch))
-            decisions.extend(rule_based(c) for c in batch)
-    return decisions
+            log.warning("LLM disambiguation failed (%s); using rule-based fallback for %d items", exc, len(idx))
+            continue
+        fresh = {keys[j]: d for j, d in zip(idx, got) if d and "is_stock" in d}
+        answers.update(fresh)
+        cache.put_many(TASK, fresh)
+    out = []
+    for c, k in zip(items, keys):
+        d = answers.get(k)
+        out.append(Decision(bool(d["is_stock"]), float(d.get("confidence", 0.7)), "disambiguated_llm")
+                   if d else rule_based(c))
+    return out

@@ -1,10 +1,19 @@
-"""Collector interface. Phase 1 ships DemoCollector; Phase 2 adds a PRAW-based RedditCollector
-that returns the same RawPost/RawComment structures, so nothing downstream changes."""
+"""Collector interface and week arithmetic.
+
+DemoCollector and RedditCollector both return CollectedWeek, so nothing downstream cares
+where data came from.
+
+Weeks: Monday 00:00 -> Sunday 23:59:59 in settings.report_timezone (default UTC).
+Timestamps are stored as naive UTC datetimes throughout the DB.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Protocol
+from zoneinfo import ZoneInfo
+
+from ..config import settings
 
 
 @dataclass
@@ -17,6 +26,7 @@ class RawPost:
     score: int
     num_comments: int
     created_utc: datetime
+    permalink: str | None = None
 
 
 @dataclass
@@ -35,6 +45,7 @@ class CollectedWeek:
     posts: list[RawPost] = field(default_factory=list)
     comments: list[RawComment] = field(default_factory=list)
     is_demo: bool = False
+    stats: dict = field(default_factory=dict)
 
 
 class Collector(Protocol):
@@ -43,13 +54,31 @@ class Collector(Protocol):
     def collect(self, week_start: date) -> CollectedWeek: ...
 
 
+def _tz() -> ZoneInfo:
+    return ZoneInfo(settings.report_timezone)
+
+
 def week_start_of(d: date | datetime) -> date:
-    """ISO week start (Monday). All weeks are Monday 00:00 -> Sunday 23:59:59 UTC."""
+    """Monday of the week containing d. Naive datetimes are UTC and converted to the report tz."""
     if isinstance(d, datetime):
-        d = d.date()
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=timezone.utc)
+        d = d.astimezone(_tz()).date()
     return d - timedelta(days=d.weekday())
 
 
-def last_complete_week(today: date | None = None) -> date:
-    today = today or datetime.utcnow().date()
-    return week_start_of(today) - timedelta(days=7)
+def week_window_utc(week_start: date) -> tuple[datetime, datetime]:
+    """[start, end) of the week as naive UTC datetimes."""
+    # Both ends are local midnights, so a DST change inside the week is handled correctly.
+    start = datetime.combine(week_start, time(), tzinfo=_tz())
+    end = datetime.combine(week_start + timedelta(days=7), time(), tzinfo=_tz())
+    to_utc = lambda x: x.astimezone(timezone.utc).replace(tzinfo=None)  # noqa: E731
+    return to_utc(start), to_utc(end)
+
+
+def last_complete_week(now: datetime | None = None) -> date:
+    """Monday of the most recent fully finished week (the previous 7 complete days)."""
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    return week_start_of(now.astimezone(timezone.utc).replace(tzinfo=None)) - timedelta(days=7)

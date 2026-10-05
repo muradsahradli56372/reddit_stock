@@ -14,6 +14,7 @@ import logging
 
 from . import llm
 from .config import settings
+from .reasons import LABELS as REASON_LABELS
 
 log = logging.getLogger(__name__)
 
@@ -25,7 +26,12 @@ def _fmt_change(pct: float | None) -> str:
     return "new this week" if pct is None else f"{pct:+.0f}% WoW"
 
 
-def template_summary(overview: dict, metrics: list[dict]) -> dict:
+def _top_reasons(reasons: dict, ticker: str, stance: str, n: int = 2) -> str:
+    items = (reasons or {}).get(ticker, {}).get(stance, [])[:n]
+    return ", ".join(f"{REASON_LABELS.get(c, c).lower()} ({k})" for c, k in items)
+
+
+def template_summary(overview: dict, metrics: list[dict], reasons: dict | None = None) -> dict:
     data, interp, spec = [], [], []
     st = overview.get("sentiment", {})
     data.append(
@@ -49,6 +55,13 @@ def template_summary(overview: dict, metrics: list[dict]) -> dict:
                     f"({_fmt_change(m['mention_change_pct'])}), unique authors {m['prev_unique_authors']} -> "
                     f"{m['unique_authors']}, across {m['subreddit_count']} subreddits; trend score "
                     f"{m['trend_score']:.0f} ({m['trend_class']}).")
+    for m in movers[:3]:
+        if m.get("attention_vs_price"):  # the "co-occurrence, not causation" caveat lives in the disclaimer
+            data.append(f"{m['ticker']}: {m['attention_vs_price'].split('. This is')[0]}.")
+    early = [m for m in metrics if m.get("is_early_signal")]
+    if early:
+        data.append("Early signals (small but fast-broadening discussion): " + ", ".join(
+            f"{m['ticker']} ({m['early_signal_score']:.0f})" for m in early[:4]) + ".")
     cooling = [m for m in metrics if m["trend_class"] == "COOLING"]
     for m in cooling[:2]:
         data.append(f"{m['ticker']} attention fell {m['prev_mentions']} -> {m['mentions']} mentions "
@@ -64,13 +77,20 @@ def template_summary(overview: dict, metrics: list[dict]) -> dict:
                else ", but unique-author growth is modest, so a smaller group is talking more.")
             + f" Sentiment among its mentions is {m['bullish_pct']:.0f}% bullish vs {m['bearish_pct']:.0f}% bearish."
         )
+        bull = _top_reasons(reasons, m["ticker"], "bullish")
+        bear = _top_reasons(reasons, m["ticker"], "bearish")
+        if bull or bear:
+            interp.append(f"{m['ticker']} discussion centres on " + "; ".join(
+                x for x in [f"bullish: {bull}" if bull else "", f"bearish: {bear}" if bear else ""] if x) + ".")
     concentrated = [m for m in metrics if m["top_author_share"] >= 0.25 and m["mentions"] >= 10]
     for m in concentrated[:2]:
         interp.append(f"{m['ticker']}'s volume is concentrated: a single account produced "
                       f"{m['top_author_share'] * 100:.0f}% of its mentions, so raw mention counts overstate "
                       f"how many people are discussing it ({m['unique_authors']} unique authors).")
     for m in cooling[:2]:
-        interp.append(f"Discussion of {m['ticker']} cooled; bearish share is {m['bearish_pct']:.0f}% of mentions.")
+        bear = _top_reasons(reasons, m["ticker"], "bearish")
+        interp.append(f"Discussion of {m['ticker']} cooled; bearish share is {m['bearish_pct']:.0f}% of mentions"
+                      + (f", most often citing {bear}." if bear else "."))
     if not interp:
         interp.append("No stock showed attention growth clearly above its own baseline this week.")
 
@@ -94,13 +114,23 @@ SYSTEM = (
 )
 
 
-def generate(overview: dict, metrics: list[dict]) -> tuple[dict, str]:
+def generate(overview: dict, metrics: list[dict], reasons: dict | None = None) -> tuple[dict, str]:
     """Returns (summary_dict, method) where method is 'llm' or 'template'."""
     if settings.use_llm:
         keep = ("ticker", "mentions", "unique_authors", "prev_mentions", "mention_change_pct",
                 "author_change_pct", "bullish_pct", "bearish_pct", "subreddit_count",
-                "top_author_share", "trend_score", "trend_class")
-        payload = {"overview": overview, "stocks": [{k: m[k] for k in keep} for m in metrics[:15]]}
+                "top_author_share", "trend_score", "trend_class", "early_signal_score", "is_early_signal",
+                "price_change_pct", "attention_vs_price")
+        ov = {k: v for k, v in overview.items() if k != "collection"}
+        stocks = []
+        for m in metrics[:15]:
+            d = {k: m.get(k) for k in keep}
+            r = (reasons or {}).get(m["ticker"])
+            if r:
+                d["reasons"] = {st: [{"reason": REASON_LABELS.get(c, c), "mentions": n} for c, n in v[:3]]
+                                for st, v in r.items()}
+            stocks.append(d)
+        payload = {"overview": ov, "stocks": stocks}
         try:
             out = llm.complete_json(settings.llm_summary_model, SYSTEM, json.dumps(payload, default=str), 1500)
             if all(isinstance(out.get(k), list) and out[k] for k in ("data", "interpretation", "speculation")):
@@ -110,4 +140,4 @@ def generate(overview: dict, metrics: list[dict]) -> tuple[dict, str]:
             log.warning("LLM summary had unexpected shape; using template")
         except Exception as exc:
             log.warning("LLM summary failed (%s); using template", exc)
-    return template_summary(overview, metrics), "template"
+    return template_summary(overview, metrics, reasons), "template"

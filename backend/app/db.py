@@ -40,8 +40,9 @@ def configure(url: str) -> None:
 
 
 def init_db() -> None:
-    from . import models  # noqa: F401  (register tables)
-    Base.metadata.create_all(engine)
+    """Create tables and apply additive migrations (new columns/indexes)."""
+    from .migrations import migrate
+    migrate(engine)
 
 
 @contextmanager

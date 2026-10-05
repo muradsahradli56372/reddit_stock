@@ -11,31 +11,44 @@ from sqlalchemy import select
 from . import db
 from .api import router
 from .config import settings
+from .logging_setup import setup_logging
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+setup_logging(settings.log_format, settings.log_level)
 log = logging.getLogger("app")
 
 
+def scheduled_run():
+    from .pipeline import run_analysis
+    try:
+        result = run_analysis()
+        log.info("scheduled analysis finished", extra={"weeks": [w["week_start"] for w in result["weeks"]]})
+    except Exception:
+        log.exception("scheduled analysis failed")
+
+
 def _start_scheduler():
-    """Optional weekly run (Monday 06:00 UTC) when SCHEDULER_ENABLED=true."""
-    import os
-    if os.getenv("SCHEDULER_ENABLED", "false").lower() not in {"1", "true", "yes"}:
+    """Weekly run (default Monday 06:00 in REPORT_TIMEZONE) when SCHEDULER_ENABLED=true."""
+    if not settings.scheduler_enabled:
         return None
     from apscheduler.schedulers.background import BackgroundScheduler
+    from apscheduler.triggers.cron import CronTrigger
 
-    from .pipeline import run_analysis
-    sched = BackgroundScheduler(timezone="UTC")
-    sched.add_job(run_analysis, "cron", day_of_week="mon", hour=6, minute=0, id="weekly_analysis")
+    sched = BackgroundScheduler(timezone=settings.report_timezone)
+    trigger = CronTrigger.from_crontab(settings.schedule_cron, timezone=settings.report_timezone)
+    sched.add_job(scheduled_run, trigger, id="weekly_analysis", max_instances=1, coalesce=True,
+                  misfire_grace_time=3600)
     sched.start()
-    log.info("Scheduler started: weekly analysis every Monday 06:00 UTC")
+    log.info("scheduler started", extra={"cron": settings.schedule_cron, "tz": settings.report_timezone,
+                                         "next_run": str(sched.get_job("weekly_analysis").next_run_time)})
     return sched
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     db.init_db()
-    log.info("Database ready (%s). Demo mode: %s. LLM: %s",
-             db.engine.url.render_as_string(hide_password=True), settings.demo_mode, settings.use_llm)
+    log.info("startup", extra={"db": db.engine.url.render_as_string(hide_password=True),
+                               "demo_mode": settings.demo_mode, "llm": settings.use_llm,
+                               "timezone": settings.report_timezone})
     if settings.auto_run_on_startup:
         from .models import WeeklyReport
         from .pipeline import run_analysis
@@ -50,7 +63,7 @@ async def lifespan(_app: FastAPI):
         sched.shutdown(wait=False)
 
 
-app = FastAPI(title="Reddit Stock Intelligence", version="0.1.0", lifespan=lifespan,
+app = FastAPI(title="Reddit Stock Intelligence", version="0.2.0", lifespan=lifespan,
               description="Research tool analysing Reddit discussion of public companies. Not trading advice.")
 app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_methods=["*"], allow_headers=["*"])
 app.include_router(router)

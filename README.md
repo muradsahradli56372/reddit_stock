@@ -4,8 +4,9 @@ A **research tool, not trading advice**. It analyses Reddit discussion of public
 produces a weekly report: which stocks are discussed most, how many *unique people* discuss them,
 sentiment, what is gaining unusual attention versus the previous week, and which subreddits drive it.
 
-**Status: Phase 1 (demo-first vertical slice).** Mock Reddit data with real extraction, sentiment,
-metrics, trend scoring, API and dashboard. The live Reddit collector is Phase 2.
+**Status: Phase 2.** Live Reddit collector (PRAW), reason extraction, Early Signal Score,
+per-subreddit sentiment, stock detail page with history, price-vs-attention comparison (yfinance),
+scheduler, structured logging, and caching. With no credentials everything runs on realistic demo data.
 
 ---
 
@@ -51,7 +52,20 @@ cd backend && python -m pytest -q
 TEST_DATABASE_URL=postgresql+psycopg://reddit:reddit@localhost:5432/reddit_stock_test python -m pytest -q
 ```
 
-Tests never call the Anthropic API. The LLM code paths are tested with a fake client.
+Tests never touch the network: the Anthropic API, Reddit (PRAW) and yfinance are all tested with fakes.
+
+### Going live
+
+1. Create a Reddit "script" app at https://www.reddit.com/prefs/apps, then set `REDDIT_CLIENT_ID`,
+   `REDDIT_CLIENT_SECRET` and `REDDIT_USER_AGENT` in `.env`. Live mode switches on automatically
+   (`DEMO_MODE=true` forces demo).
+2. Optionally set `ANTHROPIC_API_KEY` for LLM sentiment, reasons, disambiguation and the summary.
+3. Optionally set `SCHEDULER_ENABLED=true` (default: Mondays 06:00 in `REPORT_TIMEZONE`).
+4. Click **Run Analysis** or `POST /analysis/run`. Live runs process the last complete week and the
+   week before it.
+
+Prices come from yfinance in live mode (`MARKET_DATA_PROVIDER=auto`). In demo mode they are
+synthetic, and every chart and label using them says **DEMO**.
 
 ---
 
@@ -75,24 +89,32 @@ backend/app/
   db.py              engine, sessions, portable upsert (Postgres + SQLite)
   models.py          8 tables, unique constraints, indexes
   reference.py       loads data/companies.csv, blacklist.txt, ambiguous.txt
-  collectors/        base.py (interface, week math), demo.py (mock data). Phase 2: reddit.py
+  migrations.py      additive auto-migration (new tables/columns/indexes) on startup
+  collectors/        base.py (interface, timezone-aware week math), demo.py, reddit.py (PRAW, live)
   extraction.py      deterministic ticker detection + confidence
-  disambiguation.py  ambiguous queue → LLM (batched) or rule-based fallback
-  sentiment.py       finance-aware sentiment → LLM (batched) or keyword fallback
-  metrics.py         weekly aggregation, unique authors, WoW %   (pure functions)
+  disambiguation.py  ambiguous queue → LLM (batched, cached) or rule-based fallback
+  sentiment.py       sentiment + reasons in ONE LLM call per batch (cached) or keyword fallback
+  reasons.py         fixed reason taxonomy + keyword fallback
+  llm_cache.py       per-item LLM answer cache (table llm_cache)
+  metrics.py         weekly aggregation, unique authors, engagement, WoW %   (pure functions)
   trend.py           trend score 0-100 + EMERGING/RISING/STABLE/COOLING   (pure functions)
+  signals.py         Early Signal Score 0-100   (pure functions)
+  market_data.py     MarketDataProvider, YFinanceProvider, DemoMarketDataProvider, neutral wording
   summary.py         DATA / INTERPRETATION / SPECULATION narrative (template or one LLM call)
   pipeline.py        orchestration, one transaction per week, idempotent
-  api.py, main.py    FastAPI app, optional weekly scheduler
-frontend/src/        React + Recharts dashboard ("Reddit Market Pulse")
+  api.py, api_cache.py, main.py, logging_setup.py   FastAPI app, response cache, scheduler, logs
+frontend/src/        React + Recharts: dashboard (App.jsx) and stock detail page (StockPage.jsx, #/stock/TICKER)
 data/                reference data (edit these to extend)
 ```
 
 ### How the pipeline works
 
-1. **Collect.** Phase 1 uses `DemoCollector`: seeded, realistic posts/comments across 5 subreddits for
-   two consecutive weeks (last complete ISO week plus the one before). Weeks are Monday 00:00 to Sunday 23:59 UTC.
+1. **Collect.** `RedditCollector` (live) or `DemoCollector` (seeded mock data, 5 subreddits,
+   `DEMO_HISTORY_WEEKS` weeks of history). Weeks run Monday 00:00 to Sunday 23:59:59 in `REPORT_TIMEZONE`.
+   Collection happens before the DB transaction opens, so slow network calls never hold locks.
 2. **Store raw.** Authors, subreddits, posts, and comments are upserted on `reddit_id`, so re-collecting is safe.
+   If a post or comment's text changed since last time (edited on Reddit), its old mentions are
+   dropped and re-extracted. Unchanged content keeps its mentions and already-paid-for sentiment.
 3. **Dedup.** The same author posting identical text in the same week counts once (copy-paste spam).
    One post/comment counts as **one mention per ticker** no matter how many times it repeats the ticker.
 4. **Extract** (deterministic, `extraction.py`):
@@ -111,13 +133,17 @@ data/                reference data (edit these to extend)
 5. **Disambiguate** only the ambiguous queue. With a key: batched LLM calls on the fast model.
    Without: rules (person cues like "my buddy Ford" or "Harrison Ford" reject; finance cues like
    "earnings", "shares", "calls" accept; ALL-CAPS `SOFI` with no person cue accepts).
-6. **Sentiment** per mention: bullish / neutral / bearish / unclear plus confidence, only for mentions
-   that don't have one yet (re-runs don't re-pay for LLM calls).
+6. **Sentiment + reasons** per mention, in one batched LLM call: bullish / neutral / bearish / unclear
+   plus confidence, plus up to 2 reasons from a fixed taxonomy. Only mentions not yet analysed are
+   processed, and LLM answers are cached by content (`llm_cache`), so re-runs never pay twice.
 7. **Metrics** per stock per week (pure Python): mentions, unique authors, post vs. comment mentions,
-   sentiment counts and %, subreddit count and distribution, top-author share, previous-week values,
-   WoW % for mentions, authors, and comments.
-8. **Trend score and class** (see below).
-9. **Report.** Market overview plus the summary (template, or one LLM call on the stronger model).
+   sentiment counts and %, subreddit count and distribution, top-author share, average engagement,
+   previous-week values, WoW % for mentions, authors, and comments.
+8. **Trend score and class**, plus the **Early Signal Score** (see below).
+9. **Prices** for the top `MARKET_DATA_TOP_N` stocks (cached in `weekly_prices`) and a neutral
+   attention-vs-price sentence.
+10. **Report.** Market overview plus the summary (template, or one LLM call on the stronger model),
+    now including top reasons and the price comparison.
 
 ### Where AI is used, and where it is not
 
@@ -125,7 +151,9 @@ data/                reference data (edit these to extend)
 |---|---|---|
 | Ticker detection, blacklist, confidence | ✅ | |
 | Ambiguous terms ("Ford", "Sofi") | rule fallback | ✅ batched, fast model |
-| Sentiment | keyword fallback (labelled `fallback_keywords`) | ✅ batched, fast model |
+| Sentiment | keyword fallback (labelled `fallback_keywords`) | ✅ batched, fast model, cached |
+| Reasons (why bullish/bearish) | keyword fallback | ✅ same call as sentiment; must pick from the fixed taxonomy |
+| Early signal, prices, attention-vs-price wording | ✅ always | never |
 | Counting, unique authors, %, WoW, ranking, trend score, DB ops | ✅ always | never |
 | Weekly narrative | template from computed numbers | ✅ one call, summary model |
 
@@ -154,11 +182,66 @@ score    = 50 + (100*core - 50) * weight
 Classes: **EMERGING** score ≥ 75 and ≥ 8 mentions and mentions at least doubled (or new) ·
 **RISING** ≥ 60 · **COOLING** ≤ 40 · **STABLE** otherwise.
 
+### Early Signal Score (0-100)
+
+Defined in `backend/app/signals.py`. The trend score asks "is attention unusual for this stock?".
+The early signal asks "is a **small** stock starting to get **broad, engaged** attention before it is mainstream?"
+
+```
+eligible only if mentions >= 5 and unique authors >= 4        (else 0: noise / one spammer)
+G = clamp(log2((m + 3) / (baseline_m + 3)) / 3, 0, 1)          mention growth, 8x -> 1
+A = same on unique authors                                     author growth
+D = min(subreddits / 3, 1)                                     diversity
+E = clamp(log2(1 + avg_score / week_median) / log2(3), 0, 1)   engagement (upvotes per mention)
+L = 1 up to 30 mentions, linearly down to 0 at 120             low-volume factor
+score = 100 * L * (0.35 G + 0.25 A + 0.20 D + 0.20 E);  flagged when score >= 50 and mentions grew
+```
+
+In the demo, ASTS (4 → 26), RKLB (6 → 40) and SOFI (10 → 24) are flagged. NVDA (big, flat) and
+PLTR (already large) are not.
+
+### Reasons
+
+`backend/app/reasons.py` defines a fixed taxonomy: 8 bullish categories (earnings growth, product
+catalyst, contracts/partnerships, AI/data-center demand, undervalued, momentum, squeeze/meme,
+buybacks/balance sheet) and 8 bearish ones (overvaluation, weak results, dilution, competition,
+delays, macro, legal/regulatory, technical breakdown). A fixed list means reasons can be **counted**
+("12 bullish mentions cite contracts"). A reason must match the mention's stance, and the LLM's
+answers are validated against the list. Extend the dictionaries to add categories.
+
+### Live Reddit collection and its limits
+
+`collectors/reddit.py` pages through `/new` (and `/top?t=month`, to catch popular posts) for each
+subreddit until it passes the start of the week. It expands comment trees
+(`REDDIT_REPLACE_MORE_LIMIT`) and keeps only items created inside the week. PRAW respects Reddit's
+rate-limit headers. Every call also retries with exponential backoff (2s, 4s, 8s, ...) on
+429/5xx/network errors. Deleted authors become NULL (excluded from unique-author counts) and
+`[deleted]`/`[removed]` bodies are dropped. A private or banned subreddit is logged and skipped
+without stopping the run. Honest limits:
+
+* Reddit listings stop at about **1000 items**. A busy subreddit (r/wallstreetbets) can exceed that in a
+  week. The run logs `window_reached=False`, and the report's `overview.collection` shows coverage per subreddit.
+* There is **no official historical archive**. Collecting a week long after it ended gets whatever is
+  still listed. Run weekly (the scheduler) for best coverage.
+* Comments made this week on posts created **before** the week aren't collected.
+* Scores and engagement are measured at collection time, not at the end of the week.
+
+### Market data
+
+`MarketDataProvider.weekly_changes(tickers, week_start)` has two implementations:
+`YFinanceProvider` (previous Friday's close → this week's last close) and `DemoMarketDataProvider`
+(deterministic synthetic prices, always labelled `demo`). Add another provider by implementing the
+same method. The comparison is always worded as co-occurrence, e.g. *"Reddit attention increased
+(+567%) while the share price was roughly flat (+0.6%) over the same week. This is a co-occurrence,
+not evidence that one caused the other."* A test enforces that no causal or predictive words appear.
+
 ### Database
 
 `authors`, `subreddits`, `posts`, `comments`, `companies`, `stock_mentions` (with sentiment fields),
-`weekly_stock_metrics`, `weekly_reports`. Tables are created with `create_all` on startup (Alembic
-can be added once the schema stabilises).
+`weekly_stock_metrics`, `weekly_reports`, plus Phase 2 `mention_reasons`, `weekly_prices`, `llm_cache`.
+On startup `migrations.py` creates missing tables and **adds missing columns and indexes**, so a
+Phase 1 database upgrades in place (tested, and verified on a real Phase 1 Postgres DB). It handles
+additive changes only. Renames or drops would need Alembic.
 
 * `stock_mentions` is unique on `(company_id, source_key)` and indexed on `(ticker, week_start)` →
   "all mentions for PLTR in week X".
@@ -172,16 +255,20 @@ can be added once the schema stabilises).
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/health` | demo mode / LLM status |
+| GET | `/health` | demo mode, LLM, market-data provider, timezone, scheduler, cache stats |
 | GET | `/weeks` | analysed weeks, newest first |
 | GET | `/stocks?week=&limit=&sort=` | ranked metrics; `sort` ∈ mentions, trend_score, unique_authors, mention_change_pct |
-| GET | `/stocks/{ticker}?week=` | metrics + recent mentions with context, method, and sentiment |
+| GET | `/stocks/{ticker}?week=` | metrics, reasons, per-subreddit sentiment, top threads, price, recent mentions |
+| GET | `/stocks/{ticker}/history?weeks=12` | weekly series: mentions, authors, sentiment, scores, price |
+| GET | `/early-signals?week=&include_all=` | flagged early signals (or all scored stocks) |
+| GET | `/subreddits?week=` | per-subreddit activity, sentiment, authors, top tickers |
 | GET | `/trending?week=&min_growth=&min_mentions=` | by trend score; `min_growth=100` → grew > 100% |
 | GET | `/emerging?week=&include_rising=` | EMERGING (+ RISING) stocks |
 | GET | `/sentiment?week=` | overall and per-stock sentiment |
 | GET | `/weekly-report?week=` | overview + summary |
 | POST | `/analysis/run` | body `{"week_start": "YYYY-MM-DD"}` optional; processes that week and the one before |
 
+GET responses are cached in-process for `API_CACHE_TTL` seconds and cleared after every analysis run.
 `week` can be any date and is normalised to its Monday. Errors: 404 for an unknown ticker or a
 week that hasn't been analysed, 422 for invalid input, 409 if a run is already in progress.
 
@@ -189,12 +276,14 @@ week that hasn't been analysed, 422 for invalid input, 409 if a run is already i
 
 See `.env.example`; every variable is documented there. The key ones:
 `DATABASE_URL`, `ANTHROPIC_API_KEY`, `LLM_FAST_MODEL`, `LLM_SUMMARY_MODEL`, `REDDIT_CLIENT_ID`,
-`REDDIT_CLIENT_SECRET`, `AUTO_RUN_ON_STARTUP`, `SCHEDULER_ENABLED`.
+`REDDIT_CLIENT_SECRET`, `SUBREDDITS`, `REPORT_TIMEZONE`, `MARKET_DATA_PROVIDER`, `SCHEDULER_ENABLED`,
+`SCHEDULE_CRON`, `LOG_FORMAT` (`json` for one JSON object per log line), `API_CACHE_TTL`.
 API keys are read only by the backend. The frontend calls `/api`, which the Vite server proxies.
 
 ### Demo mode
 
-Phase 1 always uses demo data (the live collector is Phase 2). The mock data includes:
+Used automatically when Reddit credentials are missing. It generates `DEMO_HISTORY_WEEKS` weeks (default 8).
+The mock data includes:
 NVDA, TSLA, PLTR, AAPL, RKLB, ASTS, SOFI (plus AMD, MSFT, AMZN, GME, HOOD); a story
 (RKLB and ASTS spike, PLTR and SOFI rise, TSLA cools, NVDA flat); traps ("Ford" and "Sofi" as people,
 "Apple pie", AI, IT, ALL, DD, YOLO, CEO, A); deleted authors; and one account
@@ -213,23 +302,25 @@ concentrated (one account ≈ 50% of its mentions).
 
 ## Known limitations (honest list)
 
-* **No live Reddit data yet.** Setting Reddit credentials does nothing in Phase 1.
+* **The live Reddit and yfinance paths have never run against the real services** in the build
+  environment (its network policy blocks reddit.com and Yahoo Finance). They are covered by tests
+  with fake PRAW/yfinance objects. Please report the first real run's logs.
+* Reddit coverage limits: see "Live Reddit collection and its limits" above.
+* Keyword reason extraction only finds reasons phrased with known keywords. The LLM path is much better.
 * The keyword sentiment fallback is crude: no sarcasm, limited negation, clause-level only. It is
   labelled "fallback" in the DB, the API, and the dashboard. Use an API key for real analysis.
 * Rule-based disambiguation is heuristic (e.g. "Ford said it will cut prices" is read as a person).
 * Lower-case tickers (`nvda`) are not detected, to avoid false positives.
 * One mention per ticker per post/comment. Intensity within a comment is ignored by design.
 * The reference list is ~320 tickers, not every listed company.
-* Re-running a week doesn't delete mentions that a *changed* extractor would no longer find
-  (rebuild by deleting that week's `stock_mentions` rows). Ambiguous items rejected earlier are
-  re-checked on re-run (free with rules, costs LLM calls with a key; Phase 2 adds caching).
+* Changing the extractor or reference data doesn't retroactively remove mentions from unchanged
+  posts (delete that week's `stock_mentions` rows to rebuild). Edited posts *are* handled.
+* The API cache is per process. With several workers, use a shared cache (Phase 3).
 * `docker compose` was validated with `docker compose config` but not run in the build environment
   (no Docker daemon there). The same stack was verified with a local Postgres 16 instead.
 
 ## Roadmap
 
-* **Phase 2:** live PRAW collector (pagination, rate limits, backoff, deleted content, previous 7
-  complete days); reason extraction; Early Signal Score; per-subreddit sentiment; stock detail page;
-  `MarketDataProvider` (yfinance) with neutral price-vs-attention wording; scheduler and logging;
-  `/stocks/{ticker}/history`, `/subreddits`.
+* **Phase 2 (done):** live PRAW collector, reasons, Early Signal Score, per-subreddit sentiment,
+  stock detail page, `MarketDataProvider` + yfinance, scheduler, structured logging, caching, history/subreddit endpoints.
 * **Phase 3:** auth, alerts, more sources, backtesting, deployment.

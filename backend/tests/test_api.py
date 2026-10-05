@@ -91,8 +91,71 @@ def test_weekly_report(client):
 def test_run_analysis_endpoint(client):
     r = client.post("/analysis/run", json={"week_start": ANCHOR.isoformat()})
     assert r.status_code == 200
-    assert [w["week_start"] for w in r.json()["weeks"]] == [PREV.isoformat(), ANCHOR.isoformat()]
+    weeks = [w["week_start"] for w in r.json()["weeks"]]
+    assert weeks[-2:] == [PREV.isoformat(), ANCHOR.isoformat()] and weeks == sorted(weeks)
 
 
 def test_run_analysis_rejects_future(client):
     assert client.post("/analysis/run", json={"week_start": "2999-01-04"}).status_code == 422
+
+
+# ---------------------------------------------------------------- Phase 2 endpoints
+def test_stock_detail_phase2_fields(client):
+    body = client.get("/stocks/RKLB").json()
+    r = body["reasons"]
+    assert r["bullish"] and r["bullish"][0]["count"] >= r["bullish"][-1]["count"]
+    assert {"category", "label", "count"} <= set(r["bullish"][0])
+    assert r["methods"] == ["fallback_keywords"]
+    subs = body["subreddit_sentiment"]
+    assert sum(s["mentions"] for s in subs) == body["metrics"]["mentions"]
+    assert all(-100 <= s["net_sentiment"] <= 100 for s in subs)
+    tp = body["top_posts"]
+    assert tp and all("RKLB" in p["title"] or "Rocket Lab" in p["title"] for p in tp[:3])
+    assert body["price"]["source"] == "demo"
+    assert "not evidence that one caused the other" in body["price"]["attention_vs_price"]
+
+
+def test_history(client):
+    body = client.get("/stocks/rklb/history", params={"weeks": 8}).json()
+    weeks = body["weeks"]
+    assert len(weeks) == 8 and [w["week_start"] for w in weeks] == sorted(w["week_start"] for w in weeks)
+    assert weeks[-1]["week_start"] == ANCHOR.isoformat() and weeks[-1]["trend_class"] == "EMERGING"
+    assert weeks[-1]["mentions"] > 3 * weeks[-2]["mentions"]
+    assert client.get("/stocks/ZZZZZ/history").status_code == 404
+    assert client.get("/stocks/RKLB/history", params={"weeks": 0}).status_code == 422
+
+
+def test_history_zero_fills_weeks_without_mentions(client):
+    weeks = client.get("/stocks/KO/history").json()["weeks"]  # Coca-Cola: never mentioned in demo
+    assert weeks and all(w["mentions"] == 0 and w["trend_score"] is None for w in weeks)
+
+
+def test_subreddits(client):
+    subs = client.get("/subreddits").json()["subreddits"]
+    assert {s["subreddit"] for s in subs} == {"wallstreetbets", "stocks", "investing", "StockMarket", "options"}
+    wsb = next(s for s in subs if s["subreddit"] == "wallstreetbets")
+    assert wsb["top_tickers"][0]["ticker"] == "NVDA"  # the heavy poster lives in WSB
+    assert all(s["mentioning_authors"] <= s["mentions"] for s in subs)
+
+
+def test_early_signals(client):
+    flagged = client.get("/early-signals").json()["stocks"]
+    tickers = [s["ticker"] for s in flagged]
+    assert {"RKLB", "ASTS"} <= set(tickers) and "NVDA" not in tickers
+    assert all(s["is_early_signal"] for s in flagged)
+    scores = [s["early_signal_score"] for s in flagged]
+    assert scores == sorted(scores, reverse=True)
+    everything = client.get("/early-signals", params={"include_all": True}).json()["stocks"]
+    assert len(everything) >= len(flagged)
+
+
+def test_response_cache_hits_and_clears(client):
+    from app import api_cache
+    api_cache.clear()
+    before = dict(api_cache.stats)
+    client.get("/stocks/PLTR")
+    client.get("/stocks/PLTR")
+    assert api_cache.stats["hits"] == before["hits"] + 1
+    client.post("/analysis/run", json={"week_start": ANCHOR.isoformat()})
+    client.get("/stocks/PLTR")
+    assert api_cache.stats["misses"] == before["misses"] + 2  # cache was cleared by the run

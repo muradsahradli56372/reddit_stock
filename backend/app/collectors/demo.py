@@ -17,7 +17,7 @@ from __future__ import annotations
 import random
 from datetime import date, datetime, time, timedelta
 
-from .base import CollectedWeek, RawComment, RawPost, last_complete_week
+from .base import CollectedWeek, RawComment, RawPost, last_complete_week, week_window_utc
 
 SUBREDDITS = ["wallstreetbets", "stocks", "investing", "StockMarket", "options"]
 HEAVY_AUTHOR = "diamond_hands_4ever"
@@ -63,6 +63,8 @@ BULLISH = [
     "Can't believe how cheap {T} still is. Buying more.",
     "{T} {F} keeps getting stronger, bullish into next year",
     "Should have bought more {T} last month, the {F} news is huge",
+    "{T} earnings beat again and the backlog keeps growing",
+    "Massive contract win for {T}, partnerships are stacking up",
 ]
 BEARISH = [
     "{T} is ridiculously overvalued at these levels",
@@ -72,6 +74,9 @@ BEARISH = [
     "{T} guidance on {F} was weak, expecting it to tank",
     "Too much dilution at {T}, bagholders everywhere",
     "The {F} hype around {T} is priced in, I'm shorting it",
+    "Competition is catching up with {T}, they're losing share",
+    "{T} keeps pushing back the timeline, more delays on {F}",
+    "Rates and macro are going to crush {T} this quarter",
 ]
 NEUTRAL = [
     "What's everyone's take on {T} ahead of earnings?",
@@ -115,7 +120,8 @@ def _seed(week_start: date) -> int:
 
 
 def _rand_time(rng: random.Random, week_start: date) -> datetime:
-    return datetime.combine(week_start, time()) + timedelta(seconds=rng.randint(0, 7 * 86400 - 1))
+    start, end = week_window_utc(week_start)
+    return start + timedelta(seconds=rng.randint(0, int((end - start).total_seconds()) - 1))
 
 
 class DemoCollector:
@@ -126,6 +132,13 @@ class DemoCollector:
 
     def _profile_index(self, week_start: date) -> int:
         return 1 if week_start == self.anchor else 0
+
+    @staticmethod
+    def _scale(week_start: date, ticker: str, anchor: date) -> float:
+        """Older history weeks: the baseline profile with +-25% noise per ticker."""
+        if week_start >= anchor - timedelta(days=7):
+            return 1.0
+        return random.Random(f"{week_start}:{ticker}").uniform(0.75, 1.25)
 
     def collect(self, week_start: date) -> CollectedWeek:
         rng = random.Random(_seed(week_start))
@@ -141,15 +154,16 @@ class DemoCollector:
             counter[kind] += 1
             return f"demo{wk}{kind}{counter[kind]:05d}"
 
-        # Daily discussion threads per subreddit: comments attach here.
+        # Daily discussion threads per subreddit; ticker comments attach to these or to posts about the same ticker.
         threads: dict[str, list[str]] = {s: [] for s in SUBREDDITS}
+        ticker_threads: dict[tuple[str, str], list[str]] = {}
         for sub in SUBREDDITS:
             for day in range(7):
                 pid = new_id("p")
                 d = week_start + timedelta(days=day)
                 out.posts.append(RawPost(pid, sub, "AutoModerator", f"Daily Discussion Thread for {d:%B %d, %Y}",
                                          "Use this thread for general discussion.", rng.randint(20, 400), 0,
-                                         datetime.combine(d, time(6, 0))))
+                                         week_window_utc(week_start)[0] + timedelta(days=day, hours=6)))
                 threads[sub].append(pid)
 
         def fill(template: str, ticker: str) -> str:
@@ -158,6 +172,8 @@ class DemoCollector:
 
         for ticker, profiles in PROFILE.items():
             n, pool_size, (pb, pr, _pn), weights = profiles[idx]
+            k = self._scale(week_start, ticker, self.anchor)
+            n, pool_size = max(1, round(n * k)), max(1, round(pool_size * k))
             # Each ticker has its own author pool so unique-author counts follow the profile.
             pool = rng.sample(authors, min(pool_size, len(authors)))
             for i in range(n):
@@ -175,9 +191,11 @@ class DemoCollector:
                     pid = new_id("p")
                     out.posts.append(RawPost(pid, sub, author, title, body, rng.randint(1, 3000),
                                              rng.randint(0, 200), ts))
-                    threads[sub].append(pid)
+                    ticker_threads.setdefault((sub, ticker), []).append(pid)
                 else:
-                    out.comments.append(RawComment(new_id("c"), rng.choice(threads[sub]), author,
+                    own = ticker_threads.get((sub, ticker), [])
+                    target = rng.choice(own) if own and rng.random() < 0.5 else rng.choice(threads[sub])
+                    out.comments.append(RawComment(new_id("c"), target, author,
                                                    fill(rng.choice(tmpl), ticker), rng.randint(-5, 500), ts))
 
         # Heavy author: many NVDA comments, several of them identical copy-pastes.
