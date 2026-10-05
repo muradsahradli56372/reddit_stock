@@ -43,6 +43,7 @@ Requires Python 3.11+ and Node 18+.
 ```bash
 ./scripts/dev.sh            # macOS/Linux: creates .venv, installs deps, starts backend :8000 + dashboard :5173
 scripts\dev.bat             # Windows (cmd): same; the backend opens in its own window, keep it open
+scripts\live.bat            # Windows: same, but forces LIVE mode (StockTwits + ApeWisdom), no .env needed
 ```
 
 With no `DATABASE_URL` this uses a SQLite file (`data/reddit_stock.db`). To use a local Postgres,

@@ -11,7 +11,16 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
-load_dotenv(ROOT_DIR / ".env")
+ENV_FILE = ROOT_DIR / ".env"
+# Windows often hides extensions, so a file saved as ".env" in Notepad can really be ".env.txt".
+# Accept it (and report it) rather than silently falling back to demo mode.
+if ENV_FILE.exists():
+    ENV_STATUS = "found"
+elif (ROOT_DIR / ".env.txt").exists():
+    ENV_FILE, ENV_STATUS = ROOT_DIR / ".env.txt", "found_as_txt"
+else:
+    ENV_STATUS = "missing"
+load_dotenv(ENV_FILE)
 
 DEFAULT_SQLITE_URL = f"sqlite:///{ROOT_DIR / 'data' / 'reddit_stock.db'}"
 

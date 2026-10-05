@@ -153,6 +153,19 @@ export default function App() {
         </div>
       </header>
 
+      {health?.demo_mode && (
+        <div className="notice notice-warn">
+          <b>DEMO MODE — these numbers are generated, not real.</b>{" "}
+          {health.config?.env_file === "missing"
+            ? <>No settings file was found at <code>{health.config.path}</code>.</>
+            : <>The settings file <code>{health.config?.path}</code> has <code>TEXT_SOURCE={health.config?.text_source_setting}</code>.</>}
+          {" "}For real data it must contain <code>TEXT_SOURCE=stocktwits</code> and <code>ATTENTION_SOURCE=apewisdom</code>,
+          then restart the backend.
+        </div>
+      )}
+      {health?.config?.env_file === "found_as_txt" && (
+        <div className="notice notice-warn">Your settings file is named <code>.env.txt</code>. It works, but please rename it to <code>.env</code>.</div>
+      )}
       {runMsg && <div className="notice">{runMsg}</div>}
       {waiting && (
         <div className="notice">

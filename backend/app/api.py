@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from . import api_cache, pipeline
 from .collectors.base import week_start_of
+from . import config
 from .config import settings
 from .db import get_session
 from .models import (Comment, Company, MentionReason, Post, StockMention, Subreddit, WeeklyPrice, WeeklyReport,
@@ -68,6 +69,8 @@ def health():
     return {"status": "ok", "demo_mode": settings.demo_mode, "llm_enabled": settings.use_llm,
             "text_source": settings.resolved_text_source, "attention_source": settings.resolved_attention_source,
             "analysis_running": pipeline.run_lock.locked(),
+            "config": {"env_file": config.ENV_STATUS, "path": str(config.ENV_FILE),
+                       "text_source_setting": settings.text_source},
             "market_data": provider.name if provider else None, "timezone": settings.report_timezone,
             "scheduler": {"enabled": settings.scheduler_enabled, "cron": settings.schedule_cron,
                           "collect_cron": settings.collect_cron},

@@ -63,6 +63,15 @@ async def lifespan(_app: FastAPI):
     log.info("startup", extra={"db": db.engine.url.render_as_string(hide_password=True),
                                "demo_mode": settings.demo_mode, "llm": settings.use_llm,
                                "timezone": settings.report_timezone})
+    from .config import ENV_FILE, ENV_STATUS
+    if ENV_STATUS == "found_as_txt":
+        log.warning("settings file is named .env.txt; it was used, but please rename it to .env",
+                    extra={"path": str(ENV_FILE)})
+    if settings.demo_mode:
+        log.warning("DEMO MODE: showing generated data, not real data. For live data put "
+                    "TEXT_SOURCE=stocktwits and ATTENTION_SOURCE=apewisdom in the .env file",
+                    extra={"env_file": str(ENV_FILE), "env_status": ENV_STATUS,
+                           "TEXT_SOURCE": settings.text_source})
     if not settings.demo_mode:
         from .pipeline import purge_demo_data
         purge_demo_data()  # never mix generated demo data with real data

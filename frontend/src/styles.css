@@ -208,3 +208,5 @@ a.em-card:hover { border-color: var(--series-1); }
 .group-head th { border-bottom: none; padding-bottom: 0; }
 .group-head th.grp { text-align: center; color: var(--text-secondary); border-bottom: 1px solid var(--axis); }
 .sub-head { margin: 16px 0 6px; text-transform: none; letter-spacing: 0; font-size: 13px; }
+.notice-warn { border-left-color: var(--warn); }
+.notice code { background: var(--surface-2); padding: 1px 5px; border-radius: 3px; font-size: 12px; }
