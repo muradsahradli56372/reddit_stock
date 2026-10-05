@@ -85,55 +85,57 @@ class StockTwitsCollector:
     def trending(self) -> list[str]:
         try:
             data = self.client.get_json(f"{BASE}/trending/symbols.json")
-            return [s["symbol"].upper() for s in data.get("symbols", []) if s.get("symbol")]
+            # skip crypto (".X" suffix, e.g. WIF.X) - this tool covers stocks
+            return [s["symbol"].upper() for s in data.get("symbols", [])
+                    if s.get("symbol") and not s["symbol"].upper().endswith(".X")]
         except Exception as exc:  # noqa: BLE001
             log.warning("stocktwits trending failed", extra={"error": repr(exc)})
             return []
 
     def collect(self, week_start: date) -> CollectedWeek:
+        """Breadth-first: round 1 reads one page for EVERY symbol, later rounds go deeper for the
+        symbols that still have older messages to read, until the request budget runs out. So the
+        budget is shared fairly instead of being spent on the first few busy symbols."""
         start, end = week_window_utc(week_start)
         out = CollectedWeek(week_start=week_start, platform=PLATFORM, stats={"symbols": {}})
         seen: set[str] = set()
         budget = settings.stocktwits_max_requests
-        symbols = self.symbols or settings.stocktwits_watchlist
+        symbols = list(dict.fromkeys(self.symbols or settings.stocktwits_watchlist))
+        state = {sym: {"messages": 0, "pages": 0, "window_reached": False, "error": None, "max_id": None,
+                       "done": False} for sym in symbols}
 
-        for sym in symbols:
-            st = {"messages": 0, "pages": 0, "window_reached": False, "error": None}
-            max_id = None
-            while st["pages"] < settings.stocktwits_max_pages:
+        while budget > 0:
+            active = [sym for sym in symbols if not state[sym]["done"]]
+            if not active:
+                break
+            for sym in active:
                 if budget <= 0:
-                    st["error"] = "request budget exhausted"
                     break
-                params = {"max": max_id} if max_id else None
+                st = state[sym]
+                params = {"max": st["max_id"]} if st["max_id"] else None
+                budget -= 1
+                st["pages"] += 1
                 try:
                     data = self.client.get_json(f"{BASE}/streams/symbol/{sym.replace('.', '-')}.json", params)
                 except HttpError as exc:
-                    st["error"] = f"HTTP {exc.status}"
-                    break
+                    st["error"], st["done"] = f"HTTP {exc.status}", True
+                    continue
                 except Exception as exc:  # noqa: BLE001
-                    st["error"] = repr(exc)
-                    break
-                finally:
-                    budget -= 1
-                    st["pages"] += 1
+                    st["error"], st["done"] = repr(exc), True
+                    continue
                 msgs = data.get("messages") or []
-                if not msgs:
-                    st["window_reached"] = True
-                    break
-                stop = False
+                stop = not msgs
                 for m in msgs:
                     p = parse_message(m)
                     if p is None:
                         continue
                     if p.reddit_id in self.known_ids:
                         stop = True  # everything older is already stored
-                        st["window_reached"] = True
                         break
                     if p.created_utc >= end:
                         continue
                     if p.created_utc < start:
                         stop = True
-                        st["window_reached"] = True
                         break
                     if p.reddit_id not in seen:
                         seen.add(p.reddit_id)
@@ -141,17 +143,26 @@ class StockTwitsCollector:
                         st["messages"] += 1
                 ids = [int(m["id"]) for m in msgs if "id" in m]
                 if stop or not ids:
-                    break
-                max_id = min(ids) - 1
+                    st["window_reached"], st["done"] = True, True
+                else:
+                    st["max_id"] = min(ids) - 1
+                    if st["pages"] >= settings.stocktwits_max_pages:
+                        st["done"] = True  # sampled: older messages in the window were not read
                 self._sleep(settings.stocktwits_request_delay)
+
+        unread = [sym for sym in symbols if state[sym]["pages"] == 0]
+        partial = [sym for sym in symbols if state[sym]["pages"] and not state[sym]["window_reached"]
+                   and not state[sym]["error"]]
+        for sym in symbols:
+            st = {k: v for k, v in state[sym].items() if k not in ("max_id", "done")}
             out.stats["symbols"][sym] = st
             if st["error"]:
-                log.warning("stocktwits symbol incomplete", extra={"symbol": sym, **st})
-            if budget <= 0:
-                log.warning("stocktwits request budget exhausted; remaining symbols skipped",
-                            extra={"remaining": symbols[symbols.index(sym) + 1:]})
-                break
+                log.warning("stocktwits symbol failed", extra={"symbol": sym, **st})
         out.stats["requests"] = settings.stocktwits_max_requests - budget
-        log.info("stocktwits collected", extra={"week_start": week_start.isoformat(), "messages": len(out.posts),
-                                                "requests": out.stats["requests"]})
+        if unread:
+            log.warning("stocktwits request budget exhausted before reading some symbols",
+                        extra={"unread": unread})
+        log.info("stocktwits collected", extra={
+            "week_start": week_start.isoformat(), "messages": len(out.posts), "requests": out.stats["requests"],
+            "symbols": len(symbols), "sampled_symbols": len(partial)})
         return out

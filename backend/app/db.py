@@ -19,12 +19,17 @@ class Base(DeclarativeBase):
 def make_engine(url: str) -> Engine:
     kwargs = {"future": True, "pool_pre_ping": True}
     if url.startswith("sqlite"):
-        kwargs["connect_args"] = {"check_same_thread": False}
+        # wait up to 30s for a lock instead of failing immediately
+        kwargs["connect_args"] = {"check_same_thread": False, "timeout": 30}
     engine = create_engine(url, **kwargs)
     if url.startswith("sqlite"):
         @event.listens_for(engine, "connect")
-        def _fk_on(dbapi_conn, _):  # enforce FKs in SQLite
-            dbapi_conn.execute("PRAGMA foreign_keys=ON")
+        def _sqlite_pragmas(dbapi_conn, _):
+            dbapi_conn.execute("PRAGMA foreign_keys=ON")  # enforce FKs in SQLite
+            if ":memory:" not in url:
+                # WAL: the dashboard can read while the analysis writes ("database is locked" otherwise)
+                dbapi_conn.execute("PRAGMA journal_mode=WAL")
+            dbapi_conn.execute("PRAGMA busy_timeout=30000")
     return engine
 
 

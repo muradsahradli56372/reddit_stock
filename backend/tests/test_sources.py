@@ -67,7 +67,7 @@ def test_stocktwits_pages_window_and_dedup(monkeypatch):
     out = c.collect(WEEK)
     assert sorted(p.reddit_id for p in out.posts) == ["st_297", "st_298", "st_299"]
     assert out.platform == "stocktwits"
-    assert seen == [("NVDA", None), ("NVDA", "297"), ("AMD", None), ("AMD", "297")]
+    assert seen == [("NVDA", None), ("AMD", None), ("NVDA", "297"), ("AMD", "297")]  # breadth-first
     assert out.stats["symbols"]["NVDA"]["window_reached"] is True
 
 
@@ -86,7 +86,7 @@ def test_stocktwits_stops_at_known_ids_and_respects_budget(monkeypatch):
     out = c.collect(WEEK)
     assert [p.reddit_id for p in out.posts] == ["st_10"]  # stopped at the known message
     assert len(calls) == 2  # NVDA + TSLA, then budget exhausted -> AAPL skipped
-    assert "AAPL" not in out.stats["symbols"]
+    assert out.stats["symbols"]["AAPL"]["pages"] == 0  # never read, and reported as such
 
 
 def test_stocktwits_blocked_symbol_does_not_stop_run(monkeypatch):
@@ -117,7 +117,8 @@ def test_http_client_honours_retry_after():
 
 def test_trending():
     c = StockTwitsCollector(client=client_for(
-        lambda req: httpx.Response(200, json={"symbols": [{"symbol": "oklo"}, {"symbol": "NVDA"}, {}]})))
+        lambda req: httpx.Response(200, json={"symbols": [{"symbol": "oklo"}, {"symbol": "NVDA"}, {},
+                                                          {"symbol": "WIF.X"}]})))
     assert c.trending() == ["OKLO", "NVDA"]
 
 
@@ -440,3 +441,29 @@ def test_apewisdom_excludes_futures(monkeypatch):
             {"ticker": "ES", "mentions": 6}, {"ticker": "MSFT", "mentions": 1}]})
     rows = ApeWisdomProvider(client_for(handler)).snapshot(WEEK)
     assert [r.ticker for r in rows] == ["MSFT"]
+
+
+def test_stocktwits_budget_is_shared_across_symbols(monkeypatch):
+    """A tight budget must reach every symbol once before going deeper into any of them."""
+    monkeypatch.setattr(settings, "stocktwits_request_delay", 0)
+    monkeypatch.setattr(settings, "stocktwits_max_requests", 5)
+    calls = []
+
+    def handler(req):
+        sym = req.url.path.rsplit("/", 1)[-1].removesuffix(".json")
+        calls.append(sym)
+        base = 10_000 * (len(calls) + 1)
+        return httpx.Response(200, json={"messages": [msg(base + i, "2026-06-03T00:00:00Z", f"${sym}")
+                                                      for i in range(3)]})
+    c = StockTwitsCollector(client=client_for(handler), sleep=lambda s: None)
+    c.symbols = ["BUSY", "AAPL", "TSLA", "PLTR"]
+    c.collect(WEEK)
+    assert calls[:4] == ["BUSY", "AAPL", "TSLA", "PLTR"] and len(calls) == 5
+
+
+def test_sqlite_uses_wal(tmp_path):
+    from sqlalchemy import text
+    from app.db import make_engine
+    eng = make_engine(f"sqlite:///{tmp_path}/w.db")
+    with eng.connect() as c:
+        assert c.execute(text("PRAGMA journal_mode")).scalar() == "wal"
