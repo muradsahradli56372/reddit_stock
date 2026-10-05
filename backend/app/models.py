@@ -158,6 +158,9 @@ class WeeklyStockMetric(Base):
     reddit_change_pct: Mapped[float | None] = mapped_column(Float)
     reddit_distribution: Mapped[dict | None] = mapped_column(JSON)  # {subreddit: est. mentions}
     reddit_days_covered: Mapped[int | None] = mapped_column(Integer)
+    # False when there is no trustworthy earlier week to compare with (trend = UNRATED)
+    has_baseline: Mapped[bool | None] = mapped_column(Boolean)
+    text_baseline: Mapped[bool | None] = mapped_column(Boolean)  # text WoW comparable (else "–")
 
     __table_args__ = (
         UniqueConstraint("week_start", "ticker", name="uq_wsm_week_ticker"),
@@ -223,6 +226,21 @@ class AttentionSnapshot(Base):
         Index("ix_snapshot_date", "snapshot_date"),
         Index("ix_snapshot_ticker_date", "ticker", "snapshot_date"),
     )
+
+
+class CollectionRun(Base):
+    """When an incremental collector (StockTwits) read a given week. A week's text sample is only
+    trusted as a comparison baseline if collection started while the week was still open (within
+    its first day); a week read only after it ended is a biased sample (busy symbols: last hours only)."""
+    __tablename__ = "collection_runs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
+    week_start: Mapped[date] = mapped_column(Date, nullable=False)
+    first_run_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    last_run_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    runs: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+    __table_args__ = (UniqueConstraint("source", "week_start", name="uq_collection_run"),)
 
 
 class LLMCache(Base):

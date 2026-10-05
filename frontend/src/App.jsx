@@ -180,6 +180,22 @@ export default function App() {
           estimates. Numbers will change until the week ends.
         </div>
       )}
+      {route.page === "home" && data?.report.overview.text_coverage?.complete === false && (
+        <div className="notice notice-warn">
+          <b>Partial week.</b> Text for this week was {data.report.overview.text_coverage.collected_from
+            ? <>first collected on {data.report.overview.text_coverage.collected_from} UTC, after the week was mostly over</>
+            : <>collected without a record of when (older version), possibly after the week was mostly over</>}. Busy tickers are covered only for their last hours, so treat these numbers as a
+          sample. This week is not used as a comparison baseline.
+        </div>
+      )}
+      {route.page === "home" && data && data.report.overview.baseline_available === false && data.stocks.length > 0 && (
+        <div className="notice notice-warn">
+          <b>Trends not rated yet.</b> Week-over-week changes, trend scores and early signals need one fully collected
+          earlier week to compare with. Until then stocks show as <b>UNRATED</b> and changes as “–”.
+          {data.report.overview.text_coverage?.complete !== false &&
+            <> This week is being collected in full, so ratings start next week.</>}
+        </div>
+      )}
       {route.page === "home" && data && data.stocks.length === 0 && !health?.demo_mode && (
         <div className="notice notice-error">
           No data has been collected for this week yet. Collection runs in the background (every few hours); click

@@ -29,7 +29,7 @@ from .config import settings
 from .db import session_scope, upsert
 from .extraction import Candidate, get_extractor
 from .llm_cache import Cache
-from .models import (AttentionSnapshot, Author, Comment, Company, MentionReason, Post, StockMention, Subreddit,
+from .models import (AttentionSnapshot, Author, CollectionRun, Comment, Company, MentionReason, Post, StockMention, Subreddit,
                      WeeklyPrice,
                      WeeklyReport, WeeklyStockMetric)
 from .reference import get_reference
@@ -369,6 +369,33 @@ def load_mention_rows(session: Session, week: date) -> list[metrics.MentionRow]:
             for t, a, st, sub, sen, eng in session.execute(q).all()]
 
 
+def record_collection_run(session: Session, source: str, week: date) -> None:
+    now = datetime.utcnow()
+    run = session.scalar(select(CollectionRun).where(CollectionRun.source == source,
+                                                     CollectionRun.week_start == week))
+    if run is None:
+        session.add(CollectionRun(source=source, week_start=week, first_run_at=now, last_run_at=now, runs=1))
+    else:
+        run.last_run_at, run.runs = now, run.runs + 1
+    session.flush()
+
+
+def text_coverage(session: Session, week: date) -> dict:
+    """Is this week's text sample complete enough to compare against?
+
+    Incremental live sources (StockTwits) are complete only if collection started within the week's
+    first day. Weeks collected in one go (demo, Reddit API) are complete by construction."""
+    runs = session.scalars(select(CollectionRun).where(CollectionRun.week_start == week)).all()
+    if not runs:
+        # StockTwits data without a run record (collected by an older version): we can't tell when it
+        # was read, so be conservative. Demo / Reddit-API weeks are collected in one go: complete.
+        has_st = session.scalar(select(Post.id).where(Post.week_start == week, Post.reddit_id.like("st_%")).limit(1))
+        return {"complete": has_st is None, "collected_from": None}
+    start, _end = week_window_utc(week)
+    first = min(r.first_run_at for r in runs)
+    return {"complete": first <= start + timedelta(days=1), "collected_from": first.isoformat(timespec="minutes")}
+
+
 def weeks_with_data(session: Session, before: date, limit: int) -> list[date]:
     q = (select(Post.week_start).distinct().where(Post.week_start < before)
          .order_by(Post.week_start.desc()).limit(limit))
@@ -378,8 +405,10 @@ def weeks_with_data(session: Session, before: date, limit: int) -> list[date]:
 def compute_week_metrics(session: Session, week: date) -> list[dict]:
     current_rows = load_mention_rows(session, week)
     current = metrics.aggregate_week(current_rows)
-    history = [metrics.aggregate_week(load_mention_rows(session, w))
-               for w in weeks_with_data(session, week, BASELINE_WEEKS)]
+    # Only weeks whose text sample is complete can serve as a baseline.
+    history_weeks = [w for w in weeks_with_data(session, week, BASELINE_WEEKS * 3)
+                     if text_coverage(session, w)["complete"]][:BASELINE_WEEKS]
+    history = [metrics.aggregate_week(load_mention_rows(session, w)) for w in history_weeks]
     baselines = metrics.build_baselines(history)
     progress = week_progress(week)
     if progress < 1.0:
@@ -397,7 +426,7 @@ def compute_week_metrics(session: Session, week: date) -> list[dict]:
     reddit, _days = load_reddit_week(session, week)
     reddit_prev, reddit_avg = reddit_baselines(session, week) if reddit is not None else (None, None)
     rows = metrics.build_metric_rows(current, baselines, n_subs, reddit, reddit_prev, reddit_avg,
-                                     settings.reddit_min_weekly_mentions)
+                                     settings.reddit_min_weekly_mentions, text_baseline_known=bool(history))
 
     attach_prices(session, week, rows)
     company_ids = dict(session.execute(select(Company.ticker, Company.id)).all())
@@ -498,6 +527,9 @@ def build_overview(session: Session, week: date, metric_rows: list[dict]) -> dic
         "week_start": week.isoformat(),
         "week_end": (week + timedelta(days=6)).isoformat(),
         "in_progress": progress < 1.0,
+        "text_coverage": text_coverage(session, week),
+        "baseline_available": any(r.get("has_baseline") for r in metric_rows),
+        "unrated": sum(1 for r in metric_rows if r.get("trend_class") == "UNRATED"),
         "days_elapsed": round(progress * 7, 1),
         "posts": n_posts, "comments": n_comments,
         "total_mentions": len(mention_rows),
@@ -530,6 +562,9 @@ def process_week(collector: Collector, week: date) -> dict:
     t0 = time.monotonic()
     if should_collect(collector, week):
         data = collector.collect(week)  # network I/O happens outside the DB transaction
+        if getattr(collector, "incremental", False):
+            with session_scope() as s:
+                record_collection_run(s, collector.name, week)
     else:
         data = CollectedWeek(week, platform=getattr(collector, "name", "reddit"))
     with session_scope() as session:
@@ -610,6 +645,7 @@ def collect_now() -> dict:
             data = collector.collect(week)
             with session_scope() as session:
                 store_raw(session, data)
+                record_collection_run(session, collector.name, week)
             out["text"]["new_items"] += len(data.posts)
             out["text"]["weeks"].append(week.isoformat())
     log.info("collection finished", extra=out)

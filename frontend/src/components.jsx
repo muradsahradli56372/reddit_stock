@@ -71,10 +71,15 @@ export function Overview({ overview, prevOverview }) {
 }
 
 export function TrendBadge({ cls }) {
-  return <span className={`badge badge-${cls.toLowerCase()}`}>{cls}</span>;
+  const title = cls === "UNRATED" ? "Not enough collected history to compare with an earlier week yet" : undefined;
+  return <span className={`badge badge-${cls.toLowerCase()}`} title={title}>{cls}</span>;
 }
 
-function ScoreBar({ score }) {
+// Text week-over-week: "–" when there is no comparable earlier week (not "NEW").
+export const textChange = (s) => (s.text_baseline === false ? "–" : fmtChange(s.mention_change_pct));
+
+function ScoreBar({ score, unrated }) {
+  if (unrated) return <span className="muted">–</span>;
   return (
     <div className="score">
       <span className="num">{score.toFixed(0)}</span>
@@ -131,10 +136,10 @@ export function TopTable({ stocks }) {
                 {fmtInt(s.unique_authors)}
                 {s.top_author_share >= 0.25 && <span className="warn-dot" aria-label="concentrated">●</span>}
               </td>
-              <td className={`num ${s.mentions ? changeClass(s.mention_change_pct) : ""}`}>{s.mentions ? fmtChange(s.mention_change_pct) : "–"}</td>
+              <td className={`num ${s.mentions && s.text_baseline !== false ? changeClass(s.mention_change_pct) : ""}`}>{s.mentions ? textChange(s) : "–"}</td>
               <td className="num">{s.mentions ? fmtPct(s.bullish_pct) : "–"}</td>
               <td className="num">{s.mentions ? fmtPct(s.bearish_pct) : "–"}</td>
-              <td><ScoreBar score={s.trend_score} /></td>
+              <td><ScoreBar score={s.trend_score} unrated={s.trend_class === "UNRATED"} /></td>
               <td><TrendBadge cls={s.trend_class} /></td>
             </tr>
           ))}
@@ -174,8 +179,8 @@ export function EmergingCards({ stocks, mode = "trend" }) {
             )}
             {s.mentions > 0 ? (
               <>
-                <div><dt>Text mentions</dt><dd>{s.prev_mentions} → {s.mentions} <span className={changeClass(s.mention_change_pct)}>({fmtChange(s.mention_change_pct)})</span></dd></div>
-                <div><dt>Authors</dt><dd>{s.prev_unique_authors} → {s.unique_authors} <span className={changeClass(s.author_change_pct)}>({fmtChange(s.author_change_pct)})</span></dd></div>
+                <div><dt>Text mentions</dt><dd>{s.text_baseline === false ? s.mentions : <>{s.prev_mentions} → {s.mentions} <span className={changeClass(s.mention_change_pct)}>({fmtChange(s.mention_change_pct)})</span></>}</dd></div>
+                <div><dt>Authors</dt><dd>{s.text_baseline === false ? s.unique_authors : <>{s.prev_unique_authors} → {s.unique_authors} <span className={changeClass(s.author_change_pct)}>({fmtChange(s.author_change_pct)})</span></>}</dd></div>
                 <div><dt>Bull / Bear</dt><dd>{fmtPct(s.bullish_pct)} / {fmtPct(s.bearish_pct)}</dd></div>
               </>
             ) : (

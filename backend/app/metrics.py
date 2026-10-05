@@ -113,7 +113,7 @@ def build_baselines(history: list[dict[str, StockWeek]]) -> dict[str, Baseline]:
 def build_metric_rows(current: dict[str, StockWeek], baselines: dict[str, Baseline],
                       subreddits_in_dataset: int, reddit: dict | None = None,
                       reddit_prev: dict | None = None, reddit_avg: dict | None = None,
-                      reddit_min_mentions: float = 20) -> list[dict]:
+                      reddit_min_mentions: float = 20, text_baseline_known: bool = True) -> list[dict]:
     """One metrics dict per ticker, ranked by attention.
 
     Text sources (StockTwits / Reddit text / demo) give `current`. Count-only Reddit attention
@@ -123,6 +123,8 @@ def build_metric_rows(current: dict[str, StockWeek], baselines: dict[str, Baseli
       reddit_avg   {ticker: avg est. mentions} over earlier covered weeks, or None when none
     Tickers seen only on Reddit are included when their estimate >= reddit_min_mentions.
     Ranking: by Reddit mentions when this week has Reddit coverage, else by text mentions.
+    text_baseline_known=False: no trustworthy earlier text week exists, so text growth is UNKNOWN
+    (not "new"). Trend/early-signal then use Reddit growth only, or are UNRATED without it.
     """
     rows = []
     eligible = [s.avg_engagement for s in current.values() if s.mentions >= signals.MIN_MENTIONS]
@@ -149,11 +151,18 @@ def build_metric_rows(current: dict[str, StockWeek], baselines: dict[str, Baseli
         # union of names: a subreddit seen in both the text sample and the Reddit counts counts once
         communities = len(set(s.subreddits) | ({c for c, v in rw.distribution.items() if v > 0} if rw else set()))
         upm = (rw.upvotes / rw.mentions) if rw and rw.mentions else 0.0
-        early = signals.early_signal_score(s.mentions, b.avg_mentions, s.unique_authors, b.avg_unique_authors,
-                                           communities, s.avg_engagement, median_eng,
-                                           r_cur, r_base, upm, median_upm, reddit_max)
-        score = trend.trend_score(s.mentions, b.avg_mentions, s.unique_authors, b.avg_unique_authors,
-                                  communities, n_communities, r_cur, r_base)
+        has_baseline = text_baseline_known or r_base is not None
+        # Without a text baseline the text sample can't show growth: score on Reddit growth alone.
+        tm, tbm, ta, tba = ((s.mentions, b.avg_mentions, s.unique_authors, b.avg_unique_authors)
+                            if text_baseline_known else (0, 0, 0, 0))
+        if has_baseline:
+            early = signals.early_signal_score(tm, tbm, ta, tba, communities, s.avg_engagement, median_eng,
+                                               r_cur, r_base, upm, median_upm, reddit_max)
+            score = trend.trend_score(tm, tbm, ta, tba, communities, n_communities, r_cur, r_base)
+            trend_class = trend.classify(score, tm, tbm, r_cur, r_base)
+            is_early = signals.is_early_signal(early, tm, tbm, r_cur, r_base)
+        else:
+            early, score, trend_class, is_early = 0.0, 50.0, "UNRATED", False
         rows.append({
             "ticker": tk,
             "mentions": s.mentions,
@@ -173,14 +182,17 @@ def build_metric_rows(current: dict[str, StockWeek], baselines: dict[str, Baseli
             "prev_mentions": b.prev_mentions,
             "prev_unique_authors": b.prev_unique_authors,
             "prev_comment_mentions": b.prev_comment_mentions,
-            "mention_change_pct": pct_change(s.mentions, b.prev_mentions),
-            "author_change_pct": pct_change(s.unique_authors, b.prev_unique_authors),
-            "comment_change_pct": pct_change(s.comment_mentions, b.prev_comment_mentions),
+            "mention_change_pct": pct_change(s.mentions, b.prev_mentions) if text_baseline_known else None,
+            "author_change_pct": pct_change(s.unique_authors, b.prev_unique_authors) if text_baseline_known else None,
+            "comment_change_pct": (pct_change(s.comment_mentions, b.prev_comment_mentions)
+                                   if text_baseline_known else None),
             "trend_score": score,
-            "trend_class": trend.classify(score, s.mentions, b.avg_mentions, r_cur, r_base),
+            "trend_class": trend_class,
+            "has_baseline": has_baseline,
+            "text_baseline": text_baseline_known,
             "avg_engagement": round(s.avg_engagement, 1),
             "early_signal_score": early,
-            "is_early_signal": signals.is_early_signal(early, s.mentions, b.avg_mentions, r_cur, r_base),
+            "is_early_signal": is_early,
             "reddit_mentions": r_cur,
             "reddit_upvotes": rw.upvotes if rw else (0.0 if reddit is not None else None),
             "reddit_prev_mentions": r_prev,

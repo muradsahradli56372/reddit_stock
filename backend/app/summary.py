@@ -22,7 +22,9 @@ DISCLAIMER = ("Research tool, not investment advice. Reddit attention and sentim
               "signals of discussion, not predictors of price, and no causal link to price moves is implied.")
 
 
-def _fmt_change(pct: float | None) -> str:
+def _fmt_change(pct: float | None, has_baseline: bool = True) -> str:
+    if not has_baseline:
+        return "no earlier week to compare"
     return "new this week" if pct is None else f"{pct:+.0f}% WoW"
 
 
@@ -40,6 +42,17 @@ def _communities(m: dict) -> int:
 def template_summary(overview: dict, metrics: list[dict], reasons: dict | None = None) -> dict:
     data, interp, spec = [], [], []
     st = overview.get("sentiment", {})
+    cov = overview.get("text_coverage") or {}
+    if cov and not cov.get("complete", True):
+        when = f"first collected at {cov['collected_from']} UTC" if cov.get("collected_from") else \
+            "collected without a record of when"
+        data.append(f"Text for this week was {when}, possibly after much of the week had passed; busy tickers may "
+                    "be covered only for their last hours, so this week is a partial sample and is not used as a "
+                    "comparison baseline.")
+    if not overview.get("baseline_available", True):
+        data.append("No earlier fully collected week exists yet, so week-over-week changes, trend scores and "
+                    "early signals are not rated this week (shown as UNRATED). They start once one full week "
+                    "has been collected.")
     if overview.get("in_progress"):
         data.append(f"Week in progress: {overview.get('days_elapsed')} of 7 days so far. Text comparisons with "
                     "the previous week are pace-adjusted (previous counts scaled to the same elapsed time).")
@@ -54,7 +67,8 @@ def template_summary(overview: dict, metrics: list[dict], reasons: dict | None =
     top = metrics[:3]
     if top:
         data.append("Most discussed: " + "; ".join(
-            f"{m['ticker']} ({m['mentions']} mentions, {m['unique_authors']} authors, {_fmt_change(m['mention_change_pct'])})"
+            f"{m['ticker']} ({m['mentions']} mentions, {m['unique_authors']} authors, "
+            f"{_fmt_change(m['mention_change_pct'], m.get('text_baseline', True))})"
             for m in top) + ".")
     movers = sorted(
         [m for m in metrics if m["trend_class"] in ("EMERGING", "RISING")],
@@ -67,7 +81,8 @@ def template_summary(overview: dict, metrics: list[dict], reasons: dict | None =
             reddit = f"Reddit mentions (est.) {prev}{m['reddit_mentions']:.0f}{chg}"
         if m["mentions"]:
             text = (f"{m['prev_mentions']} -> {m['mentions']} text mentions "
-                    f"({_fmt_change(m['mention_change_pct'])}), unique authors {m['prev_unique_authors']} -> "
+                    f"({_fmt_change(m['mention_change_pct'], m.get('text_baseline', True))}), unique authors "
+                    f"{m['prev_unique_authors']} -> "
                     f"{m['unique_authors']}, across {_communities(m)} communities")
         else:
             text = "not in the text sample"
@@ -87,7 +102,7 @@ def template_summary(overview: dict, metrics: list[dict], reasons: dict | None =
                         f"{m['reddit_mentions']:.0f} est. mentions ({_fmt_change(m['reddit_change_pct'])}).")
         else:
             data.append(f"{m['ticker']} attention fell {m['prev_mentions']} -> {m['mentions']} mentions "
-                        f"({_fmt_change(m['mention_change_pct'])}).")
+                        f"({_fmt_change(m['mention_change_pct'], m.get('text_baseline', True))}).")
 
     # Interpretation: explicitly derived from the numbers above.
     for m in movers[:3]:

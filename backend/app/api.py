@@ -28,7 +28,7 @@ METRIC_FIELDS = (
     "comment_change_pct", "trend_score", "trend_class", "avg_engagement", "early_signal_score",
     "is_early_signal", "price_change_pct", "attention_vs_price",
     "reddit_mentions", "reddit_upvotes", "reddit_prev_mentions", "reddit_change_pct", "reddit_distribution",
-    "reddit_days_covered",
+    "reddit_days_covered", "has_baseline", "text_baseline",
 )
 
 

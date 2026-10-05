@@ -399,6 +399,11 @@ def test_partial_week_compares_pace_not_totals(analysed_db, monkeypatch):
             return CollectedWeek(w, posts=self.posts, platform="stocktwits")
     monkeypatch.setattr(pipeline, "week_progress",
                         lambda w, now=None: 2 / 7 if w == cur_week else 1.0)
+    from app.models import CollectionRun
+    with session_scope() as s:  # both weeks were collected while open -> valid baseline
+        for w in (prev_week, cur_week):
+            s.add(CollectionRun(source="stocktwits", week_start=w, first_run_at=datetime(w.year, w.month, w.day, 1),
+                                last_run_at=datetime(w.year, w.month, w.day, 23), runs=10))
     pipeline.process_week(Fixed(posts_prev), prev_week)
     pipeline.process_week(Fixed(posts_cur), cur_week)
     from app.models import WeeklyReport, WeeklyStockMetric
@@ -467,3 +472,77 @@ def test_sqlite_uses_wal(tmp_path):
     eng = make_engine(f"sqlite:///{tmp_path}/w.db")
     with eng.connect() as c:
         assert c.execute(text("PRAGMA journal_mode")).scalar() == "wal"
+
+
+# ---------------------------------------------------------------- baselines & first-week honesty
+def test_no_baseline_means_unrated_not_emerging():
+    cur = metrics.aggregate_week([metrics.MentionRow("SPY", f"u{i}", "post", "stocktwits", "neutral", 1)
+                                  for i in range(300)])
+    [r] = metrics.build_metric_rows(cur, {}, 1, text_baseline_known=False)
+    assert r["trend_class"] == "UNRATED" and r["has_baseline"] is False and r["text_baseline"] is False
+    assert r["mention_change_pct"] is None and r["early_signal_score"] == 0.0 and not r["is_early_signal"]
+    [r2] = metrics.build_metric_rows(cur, {}, 1)  # with a (zero) baseline: genuinely new -> rated
+    assert r2["trend_class"] == "EMERGING"
+
+
+def test_reddit_baseline_rates_even_without_text_baseline():
+    cur = metrics.aggregate_week([metrics.MentionRow("RKLB", f"u{i}", "post", "stocktwits", "bullish", 1)
+                                  for i in range(40)])
+    reddit = {"RKLB": RedditWeek("RKLB", 400, 900, {"wsb": 400}, 7)}
+    [r] = metrics.build_metric_rows(cur, {}, 1, reddit, {"RKLB": 60}, {"RKLB": 60}, 20,
+                                    text_baseline_known=False)
+    assert r["has_baseline"] and not r["text_baseline"] and r["mention_change_pct"] is None
+    assert r["trend_class"] == "EMERGING" and r["reddit_change_pct"] > 500
+
+
+def test_week_collected_late_is_not_a_baseline(analysed_db):
+    """Week A collected only after it ended -> week B (collected while open) is UNRATED, not 'all NEW'."""
+    from app import pipeline
+    from app.collectors.base import CollectedWeek
+    from app.models import CollectionRun, WeeklyReport, WeeklyStockMetric
+    wa, wb = date(2026, 4, 6), date(2026, 4, 13)
+
+    class Fixed:
+        name, incremental = "stocktwits", False
+
+        def __init__(self, posts):
+            self.posts = posts
+
+        def collect(self, w):
+            return CollectedWeek(w, posts=self.posts, platform="stocktwits")
+
+    def posts(base, day0):
+        return [parse_message(msg(base + i, f"2026-04-{day0 + i % 7:02d}T12:00:00Z", "$SPY", f"u{base}{i}"))
+                for i in range(20)]
+    with session_scope() as s:
+        s.add(CollectionRun(source="stocktwits", week_start=wa, first_run_at=datetime(2026, 4, 13, 9),
+                            last_run_at=datetime(2026, 4, 13, 9), runs=1))  # read after week A ended
+        s.add(CollectionRun(source="stocktwits", week_start=wb, first_run_at=datetime(2026, 4, 13, 9),
+                            last_run_at=datetime(2026, 4, 19, 20), runs=30))
+    pipeline.process_week(Fixed(posts(80000, 6)), wa)
+    pipeline.process_week(Fixed(posts(81000, 13)), wb)
+    with session_scope() as s:
+        m = s.scalar(select(WeeklyStockMetric).where(WeeklyStockMetric.week_start == wb,
+                                                     WeeklyStockMetric.ticker == "SPY"))
+        ov_a = s.scalar(select(WeeklyReport.overview).where(WeeklyReport.week_start == wa))
+        ov_b = s.scalar(select(WeeklyReport.overview).where(WeeklyReport.week_start == wb))
+    assert m.trend_class == "UNRATED" and m.mention_change_pct is None
+    assert ov_a["text_coverage"]["complete"] is False and ov_b["text_coverage"]["complete"] is True
+    assert ov_b["baseline_available"] is False
+
+
+def test_stocktwits_week_without_run_record_is_partial(analysed_db):
+    from app import pipeline
+    from app.collectors.base import CollectedWeek
+    w = date(2026, 3, 2)
+
+    class Fixed:
+        name, incremental = "stocktwits", False
+
+        def collect(self, week):
+            return CollectedWeek(week, posts=[parse_message(msg(90001, "2026-03-03T10:00:00Z", "$SPY"))],
+                                 platform="stocktwits")
+    pipeline.process_week(Fixed(), w)
+    with session_scope() as s:
+        assert pipeline.text_coverage(s, w)["complete"] is False
+        assert pipeline.text_coverage(s, date(2025, 1, 6))["complete"] is True  # no StockTwits data -> complete

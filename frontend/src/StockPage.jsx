@@ -197,15 +197,18 @@ export default function StockPage({ ticker, week, onBack }) {
           )}
           {m.mentions > 0 && (
             <>
-              <Kpi label="Text mentions" value={fmtInt(m.mentions)} sub={`${fmtChange(m.mention_change_pct)} WoW`}
-                   subClass={changeClass(m.mention_change_pct)} />
-              <Kpi label="Unique authors" value={fmtInt(m.unique_authors)} sub={`${fmtChange(m.author_change_pct)} WoW`}
-                   subClass={changeClass(m.author_change_pct)} />
+              <Kpi label="Text mentions" value={fmtInt(m.mentions)}
+                   sub={m.text_baseline === false ? "no earlier week yet" : `${fmtChange(m.mention_change_pct)} WoW`}
+                   subClass={m.text_baseline === false ? "" : changeClass(m.mention_change_pct)} />
+              <Kpi label="Unique authors" value={fmtInt(m.unique_authors)}
+                   sub={m.text_baseline === false ? "no earlier week yet" : `${fmtChange(m.author_change_pct)} WoW`}
+                   subClass={m.text_baseline === false ? "" : changeClass(m.author_change_pct)} />
               <Kpi label="Bullish" value={fmtPct(m.bullish_pct)} sub={`${m.bullish} mentions`} />
               <Kpi label="Bearish" value={fmtPct(m.bearish_pct)} sub={`${m.bearish} mentions`} />
             </>
           )}
-          <Kpi label="Trend score" value={m.trend_score.toFixed(0)} sub={m.trend_class} />
+          <Kpi label="Trend score" value={m.trend_class === "UNRATED" ? "–" : m.trend_score.toFixed(0)}
+               sub={m.trend_class === "UNRATED" ? "not rated yet (no history)" : m.trend_class} />
           <Kpi label="Early signal" value={(m.early_signal_score ?? 0).toFixed(0)}
                sub={m.is_early_signal ? "flagged" : "not flagged"} />
           <Kpi label={`Price (week)${isDemoPrice ? " · demo" : ""}`}
